@@ -134,6 +134,7 @@ lambda/main
 lambda/bootstrap
 
 # Local development
+.envrc
 .env.local
 .env.development
 .env.production
