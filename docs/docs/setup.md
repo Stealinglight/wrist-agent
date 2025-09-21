@@ -52,7 +52,7 @@ AWS_REGION=us-west-2
 AWS_PROFILE=default
 
 # Bedrock Configuration
-BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022-v2:0
+BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
 
 # Security Configuration
 CLIENT_TOKEN_PARAM_NAME=/wrist-agent/client-token
@@ -190,10 +190,10 @@ echo "Your Wrist Agent Token: $TOKEN"
 
 ## Step 6: Enable Bedrock Model Access
 
-Ensure Claude 3.5 Sonnet is enabled in your AWS region:
+Ensure Claude Sonnet 4 is enabled in your AWS region:
 
 1. Go to **AWS Bedrock Console** → **Model Access**
-2. Request access to **Anthropic Claude 3.5 Sonnet**
+2. Request access to **Anthropic Claude Sonnet 4**
 3. Wait for approval (usually instant for Claude models)
 
 ## Troubleshooting

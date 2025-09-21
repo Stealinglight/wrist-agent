@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
@@ -62,13 +64,13 @@ var (
 func init() {
 	// Load environment variables
 	region = getEnv("BEDROCK_REGION", "us-west-2")
-	modelID = getEnv("MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+	modelID = getEnv("MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
 	tokenParamName = getEnv("CLIENT_TOKEN_PARAM", "/wrist-agent/client-token")
 
 	// Initialize AWS clients
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
+	cfg, err := initializeAWSConfig()
 	if err != nil {
-		log.Fatalf("Failed to load AWS config: %v", err)
+		log.Fatalf("Failed to initialize AWS config: %v", err)
 	}
 
 	ssmClient = ssm.NewFromConfig(cfg)
@@ -80,6 +82,107 @@ func init() {
 	}
 
 	log.Printf("Initialized Wrist Agent Lambda - Region: %s, Model: %s", region, modelID)
+}
+
+// initializeAWSConfig sets up AWS configuration
+func initializeAWSConfig() (aws.Config, error) {
+	ctx := context.TODO()
+
+	// Option 1: Check for direct BEDROCK_API_KEY environment variable (local development)
+	if apiKey := os.Getenv("BEDROCK_API_KEY"); apiKey != "" {
+		log.Printf("Using static credentials from BEDROCK_API_KEY environment variable")
+		accessKeyID, secretAccessKey, err := parseBedrockAPIKey(apiKey)
+		if err != nil {
+			return aws.Config{}, fmt.Errorf("failed to parse BEDROCK_API_KEY: %w", err)
+		}
+
+		return aws.Config{
+			Region:      region,
+			Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+		}, nil
+	}
+
+	// Option 2: Check for BEDROCK_API_KEY_PARAM (production with encrypted SSM parameter)
+	if apiKeyParamName := os.Getenv("BEDROCK_API_KEY_PARAM"); apiKeyParamName != "" {
+		log.Printf("Attempting to load Bedrock API key from SSM parameter: %s", apiKeyParamName)
+
+		// First, create a basic config to access SSM
+		basicCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+		if err != nil {
+			return aws.Config{}, fmt.Errorf("failed to load basic AWS config: %w", err)
+		}
+
+		// Load API key from SSM parameter
+		tempSSMClient := ssm.NewFromConfig(basicCfg)
+		result, err := tempSSMClient.GetParameter(ctx, &ssm.GetParameterInput{
+			Name:           aws.String(apiKeyParamName),
+			WithDecryption: aws.Bool(true), // Decrypt the SecureString parameter
+		})
+		if err != nil {
+			log.Printf("Failed to load API key from SSM parameter %s: %v", apiKeyParamName, err)
+			log.Printf("Falling back to IAM role authentication")
+		} else {
+			// Parse the API key from SSM parameter
+			apiKey := *result.Parameter.Value
+			accessKeyID, secretAccessKey, err := parseBedrockAPIKey(apiKey)
+			if err != nil {
+				log.Printf("Failed to parse API key from SSM parameter: %v", err)
+				log.Printf("Falling back to IAM role authentication")
+			} else {
+				log.Printf("Successfully loaded static credentials from SSM parameter")
+				return aws.Config{
+					Region:      region,
+					Credentials: credentials.NewStaticCredentialsProvider(accessKeyID, secretAccessKey, ""),
+				}, nil
+			}
+		}
+	}
+
+	// Option 3: Fallback to default AWS config (IAM role)
+	log.Printf("Using default AWS credentials (IAM role)")
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("failed to load default AWS config: %w", err)
+	}
+
+	return cfg, nil
+}
+
+// parseBedrockAPIKey parses the base64-encoded Bedrock API key
+// Expected format after base64 decode: "BedrockAPIKey-{accessKeyId}:{secretAccessKey}"
+func parseBedrockAPIKey(encodedKey string) (accessKeyID, secretAccessKey string, err error) {
+	// Decode base64
+	decoded, err := base64.StdEncoding.DecodeString(encodedKey)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to decode base64 API key: %w", err)
+	}
+
+	decodedStr := string(decoded)
+	log.Printf("Decoded API key format: %s", decodedStr[:min(20, len(decodedStr))]+"...")
+
+	// Split by colon to separate access key ID and secret access key
+	parts := strings.SplitN(decodedStr, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("invalid API key format: expected 'accessKeyId:secretAccessKey'")
+	}
+
+	accessKeyID = parts[0]
+	secretAccessKey = parts[1]
+
+	if accessKeyID == "" || secretAccessKey == "" {
+		return "", "", fmt.Errorf("invalid API key: access key ID or secret access key is empty")
+	}
+
+	log.Printf("Parsed credentials - Access Key ID: %s...", accessKeyID[:min(10, len(accessKeyID))])
+	return accessKeyID, secretAccessKey, nil
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func loadClientToken() error {

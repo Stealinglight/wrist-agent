@@ -1,6 +1,6 @@
 # Wrist Agent
 
-A seamless Apple Watch to AWS Bedrock integration system that enables one-tap voice capture, intelligent processing through Claude 3.5 Sonnet, and automatic creation of Notes, Reminders, or Calendar events.
+A seamless Apple Watch to AWS Bedrock integration system that enables one-tap voice capture, intelligent processing through Claude Sonnet 4, and automatic creation of Notes, Reminders, or Calendar events.
 
 ## 🚀 Quick Start
 
@@ -11,7 +11,7 @@ A seamless Apple Watch to AWS Bedrock integration system that enables one-tap vo
 ## ✨ Key Features
 
 - **🎙️ One-Tap Voice Capture**: Direct from Apple Watch with complication support
-- **🧠 AI Processing**: Claude 3.5 Sonnet with optional extended thinking (up to 65K thinking tokens)
+- **🧠 AI Processing**: Claude Sonnet 4 with optional extended thinking (up to 65K thinking tokens)
 - **📱 Native Integration**: Seamlessly creates Notes, Reminders, and Calendar events
 - **🔒 Secure**: Header-based authentication with SSM Parameter Store
 - **💰 Cost-Optimized**: Lambda Function URLs instead of API Gateway (~$15-31/month)
@@ -25,7 +25,7 @@ graph LR
     A[Apple Watch] --> B[Apple Shortcut]
     B --> C[Lambda Function URL]
     C --> D[Go Lambda]
-    D --> E[Bedrock Claude 3.5]
+    D --> E[Bedrock Claude 4]
     E --> F[Structured Response]
     F --> G[iOS Apps]
 
@@ -38,7 +38,7 @@ graph LR
 
 - **Apple Watch + Shortcuts**: Voice capture and iOS app integration
 - **AWS Lambda**: Go 1.22+ runtime with Function URLs (ARM64)
-- **AWS Bedrock**: Claude 3.5 Sonnet with Messages API
+- **AWS Bedrock**: Claude Sonnet 4 with Messages API
 - **CDK v2**: TypeScript infrastructure as code
 - **GitHub Actions**: OIDC-based CI/CD pipeline
 - **Docusaurus**: Dual documentation (human + agent guides)
@@ -71,7 +71,7 @@ Enable extended reasoning with up to 65K thinking tokens for complex queries.
 
 - **Lambda**: Go 1.22+ with provided.al2 runtime
 - **Function URLs**: Direct HTTPS endpoints with CORS
-- **Bedrock**: Claude 3.5 Sonnet (anthropic.claude-3-5-sonnet-20241022-v2:0)
+- **Bedrock**: Claude Sonnet 4 (anthropic.claude-sonnet-4-20250514-v1:0)
 - **SSM Parameter Store**: Secure token management
 - **IAM**: Least privilege access control
 
@@ -222,7 +222,7 @@ Monthly costs for moderate usage (100 requests/day):
 | Service            | Cost              |
 | ------------------ | ----------------- |
 | Lambda Invocations | ~$0.50            |
-| Bedrock Claude 3.5 | ~$15-30           |
+| Bedrock Claude 4   | ~$15-30           |
 | SSM Parameter      | ~$0.05            |
 | **Total**          | **~$15-31/month** |
 
@@ -265,7 +265,7 @@ Uses OIDC for secure AWS deployment (no long-lived credentials).
 
 **Bedrock Access Denied**
 
-- Enable Claude 3.5 Sonnet in Bedrock console
+- Enable Claude Sonnet 4 in Bedrock console
 - Verify IAM permissions
 
 **CDK Deployment Fails**
@@ -282,7 +282,7 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 🙏 Acknowledgments
 
 - **AWS CDK Team** - Infrastructure as code framework
-- **Anthropic** - Claude 3.5 Sonnet language model
+- **Anthropic** - Claude Sonnet 4 language model
 - **Apple** - Shortcuts and Watch integration
 - **Go Team** - Efficient Lambda runtime
 

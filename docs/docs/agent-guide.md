@@ -111,7 +111,7 @@ Voice Input → Mode Selection → HTTP POST → Response Parsing → iOS App Cr
 
 ### 4. Bedrock Integration Pattern
 
-Claude 3.5 Sonnet integration uses Messages API:
+Claude Sonnet 4 integration uses Messages API:
 
 ```go
 requestBody := map[string]interface{}{
@@ -132,7 +132,7 @@ if req.ThinkingTokens > 0 {
 
 **Critical Implementation Details:**
 
-- Model ID: `anthropic.claude-3-5-sonnet-20241022-v2:0`
+- Model ID: `anthropic.claude-sonnet-4-20250514-v1:0`
 - Must use Messages API format (not legacy Completions)
 - System prompt engineering for JSON output
 - Thinking tokens parameter is optional but powerful for complex queries

@@ -33,6 +33,18 @@ export class WristAgentStack extends cdk.Stack {
       tier: ssm.ParameterTier.STANDARD,
     });
 
+    // Create encrypted SSM Parameter for Bedrock API key (if provided)
+    let bedrockApiKeyParam: ssm.StringParameter | undefined;
+    if (process.env.BEDROCK_API_KEY) {
+      bedrockApiKeyParam = new ssm.StringParameter(this, 'BedrockAPIKey', {
+        parameterName: '/wrist-agent/bedrock-api-key',
+        description: 'Encrypted Bedrock API key for authentication',
+        stringValue: process.env.BEDROCK_API_KEY,
+        type: ssm.ParameterType.SECURE_STRING, // Explicitly create as encrypted SecureString
+        tier: ssm.ParameterTier.STANDARD,
+      });
+    }
+
     // Create Go Lambda function
     this.fn = new GoFunction(this, 'WristAgentHandler', {
       entry: '../lambda',
@@ -44,21 +56,34 @@ export class WristAgentStack extends cdk.Stack {
         BEDROCK_REGION: config.region,
         MODEL_ID: config.modelId,
         CLIENT_TOKEN_PARAM: config.clientTokenParam,
+        // SSM parameter name for encrypted Bedrock API key
+        BEDROCK_API_KEY_PARAM: '/wrist-agent/bedrock-api-key',
+        // For local development, BEDROCK_API_KEY can be set directly
+        ...(process.env.BEDROCK_API_KEY &&
+          !bedrockApiKeyParam && {
+            BEDROCK_API_KEY: process.env.BEDROCK_API_KEY,
+          }),
       },
-      description: 'Wrist Agent Lambda handler for Bedrock integration',
+      description: 'Wrist Agent Lambda handler for Bedrock integration with hybrid authentication',
     });
 
-    // Grant Bedrock permissions
-    this.fn.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ['bedrock:InvokeModel'],
-        resources: [`arn:aws:bedrock:${config.region}::foundation-model/${config.modelId}`],
-      })
-    );
+    // Note: Bedrock IAM permissions removed - using static API key authentication instead
+    // If you need to fall back to IAM role authentication, uncomment the following:
+    // this.fn.addToRolePolicy(
+    //   new iam.PolicyStatement({
+    //     effect: iam.Effect.ALLOW,
+    //     actions: ['bedrock:InvokeModel'],
+    //     resources: [`arn:aws:bedrock:${config.region}::foundation-model/${config.modelId}`],
+    //   })
+    // );
 
     // Grant SSM parameter read access
     this.tokenParam.grantRead(this.fn);
+
+    // Grant access to encrypted Bedrock API key parameter if it exists
+    if (bedrockApiKeyParam) {
+      bedrockApiKeyParam.grantRead(this.fn);
+    }
 
     // Create Function URL with CORS configuration
     this.fUrl = this.fn.addFunctionUrl({
