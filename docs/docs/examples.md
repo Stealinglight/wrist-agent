@@ -94,7 +94,7 @@ curl -X POST "$FUNCTION_URL" \
   "markdown": "# Call Dentist\n\nSchedule teeth cleaning appointment",
   "action": "reminder",
   "title": "Call dentist to schedule cleaning",
-  "dueISO": "2025-12-20T14:00:00Z",
+  "dueISO": "2025-01-20T14:00:00Z",
   "tags": ["health", "dentist"]
 }
 ```
@@ -124,8 +124,8 @@ curl -X POST "$FUNCTION_URL" \
   "markdown": "# Team Standup\n\nRegular team sync meeting",
   "action": "event",
   "title": "Team Standup",
-  "startISO": "2025-12-23T10:00:00Z",
-  "endISO": "2025-12-23T11:00:00Z",
+  "startISO": "2025-01-20T10:00:00Z",
+  "endISO": "2025-01-20T11:00:00Z",
   "location": "Conference Room",
   "url": "https://zoom.us/j/your-meeting-id",
   "notes": "Regular team standup meeting",

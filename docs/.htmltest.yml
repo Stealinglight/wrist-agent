@@ -1,0 +1,16 @@
+# htmltest configuration for Docusaurus site with /wrist-agent/ baseUrl
+DirectoryPath: build
+CheckExternal: false
+CheckInternal: true
+CheckInternalHash: true
+# Docusaurus builds with baseUrl: '/wrist-agent/', but files are at root in build/
+# We need to strip the /wrist-agent/ prefix when checking internal links
+IgnoreURLs:
+  - "^https://github.com/"
+  - "^https://aws.amazon.com/"
+  - "^https://docs.aws.amazon.com/"
+  - "^https://v8.dev/"
+  - "^https://zoom.us/"
+  - "^/wrist-agent/"  # Ignore links with baseUrl prefix as they're for GitHub Pages
+IgnoreDirectoryMissingTrailingSlash: true
+IgnoreInternalEmptyHash: true

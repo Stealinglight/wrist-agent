@@ -92,6 +92,15 @@ aws iam create-role \
   --assume-role-policy-document file://github-trust-policy.json
 
 # 3. Attach permissions
+# Note: PowerUserAccess grants broad permissions. For production deployments,
+# create a custom policy with only the required permissions:
+# - cloudformation:* (for CDK stack management)
+# - lambda:* (for function deployment)
+# - iam:GetRole, iam:PassRole (limited IAM access)
+# - ssm:GetParameter, ssm:PutParameter (for parameter store)
+# - bedrock:InvokeModel (for Bedrock access)
+# - logs:CreateLogGroup, logs:PutRetentionPolicy (for CloudWatch)
+# For quick setup, you can use PowerUserAccess:
 aws iam attach-role-policy \
   --role-name WristAgentGitHubActions \
   --policy-arn arn:aws:iam::aws:policy/PowerUserAccess

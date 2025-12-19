@@ -49,8 +49,12 @@ jobs:
       # Check for broken links in built site
       - name: Check for broken links
         run: |
-          npm install -g broken-link-checker
-          npx broken-link-checker http://localhost:3000 --recursive --ordered --exclude-external || true
+          # Install htmltest for static HTML link checking
+          wget -q https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz
+          tar xzf htmltest_0.17.0_linux_amd64.tar.gz
+          
+          # Check for broken links in built static files
+          ./htmltest
         working-directory: docs
 
   deploy:
