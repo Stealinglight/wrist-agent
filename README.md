@@ -248,6 +248,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
 GitHub Actions automatically:
 
 - **Tests**: Run Go and CDK tests on PRs
+- **Bootstrap**: Run `cdk bootstrap` to prepare AWS environment
 - **Deploys**: Deploy infrastructure on main branch pushes
 - **Security**: Scan for vulnerabilities with Trivy
 - **Documentation**: Deploy docs to GitHub Pages
@@ -270,7 +271,7 @@ Uses OIDC for secure AWS deployment (no long-lived credentials).
 
 **CDK Deployment Fails**
 
-- Ensure CDK is bootstrapped: `npx cdk bootstrap`
+- Ensure CDK is bootstrapped: `npx cdk bootstrap` (GitHub Actions handles this automatically)
 - Check AWS credentials and permissions
 
 **More help: [docs/docs/troubleshooting.md](docs/docs/troubleshooting.md)**

@@ -223,7 +223,7 @@ test('Lambda Function URL Created', () => {
 ### 3. CDK Configuration Issues
 
 - **Wrong Lambda construct**: Must use `@aws-cdk/aws-lambda-go-alpha`
-- **Missing bootstrap**: CDK must be bootstrapped before deployment
+- **Missing bootstrap**: CDK must be bootstrapped before deployment (GitHub Actions handles this automatically)
 - **Go module path**: Entry path must point to directory containing `go.mod`
 
 ### 4. Apple Shortcut Issues
