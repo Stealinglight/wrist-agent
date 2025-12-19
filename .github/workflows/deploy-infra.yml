@@ -118,14 +118,18 @@ jobs:
       - name: Deploy CDK Stack
         run: |
           cd cdk
-          npx cdk deploy --require-approval never
+          npx cdk deploy --require-approval never --outputs-file outputs.json
 
       - name: Get Function URL
         id: function-url
         run: |
           cd cdk
-          FUNCTION_URL=$(npx cdk list --json | jq -r '.[0].outputs.FunctionUrl // empty')
-          echo "function-url=$FUNCTION_URL" >> $GITHUB_OUTPUT
+          if [ -f outputs.json ]; then
+            FUNCTION_URL=$(jq -r '.WristAgentStack.FunctionUrl // empty' outputs.json)
+            echo "function-url=$FUNCTION_URL" >> $GITHUB_OUTPUT
+          else
+            echo "function-url=" >> $GITHUB_OUTPUT
+          fi
 
       - name: Comment Function URL
         if: github.event_name == 'pull_request' && steps.function-url.outputs.function-url != ''
