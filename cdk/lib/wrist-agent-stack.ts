@@ -67,7 +67,7 @@ export class WristAgentStack extends cdk.Stack {
       cors: {
         allowCredentials: false,
         allowedHeaders: ['Content-Type', 'X-Client-Token'],
-        allowedMethods: [lambda.HttpMethod.POST, lambda.HttpMethod.OPTIONS],
+        allowedMethods: [lambda.HttpMethod.POST],
         allowedOrigins: ['*'],
         maxAge: cdk.Duration.hours(1),
       },
