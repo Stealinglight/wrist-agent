@@ -7,8 +7,7 @@ const app = new cdk.App();
 
 // Get configuration from environment or use defaults
 const region = process.env.AWS_REGION || 'us-west-2';
-const modelId = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-sonnet-4-20250514-v1:0';
-const clientTokenParam = process.env.CLIENT_TOKEN_PARAM_NAME || '/wrist-agent/client-token';
+const modelId = process.env.BEDROCK_MODEL_ID || 'anthropic.claude-haiku-4-5-20251001-v1:0';
 
 new WristAgentStack(app, 'WristAgentStack', {
   env: {
@@ -22,6 +21,5 @@ new WristAgentStack(app, 'WristAgentStack', {
   config: {
     region: region,
     modelId: modelId,
-    clientTokenParam: clientTokenParam,
   },
 });
