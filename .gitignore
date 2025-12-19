@@ -132,6 +132,7 @@ go.work
 # Build artifacts
 lambda/main
 lambda/bootstrap
+lambda/wrist-agent
 
 # Local development
 .envrc
