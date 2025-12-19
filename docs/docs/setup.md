@@ -134,6 +134,8 @@ aws iam attach-role-policy \
 
 4. **Push to main branch** to trigger deployment
 
+   > **Note:** The GitHub Actions workflow automatically runs `cdk bootstrap` before deployment, so no manual bootstrap is required.
+
 ## Step 4: Verify Deployment
 
 After deployment completes, you should see outputs similar to:
