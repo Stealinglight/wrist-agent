@@ -110,6 +110,11 @@ jobs:
           cd cdk
           npm run build
 
+      - name: Bootstrap CDK
+        run: |
+          cd cdk
+          npx cdk bootstrap
+
       - name: Deploy CDK Stack
         run: |
           cd cdk
