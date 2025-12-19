@@ -64,7 +64,7 @@ func handler(ctx context.Context, event events.LambdaFunctionURLRequest) (events
 
 - Uses `events.LambdaFunctionURLRequest` (not API Gateway events)
 - Authentication via `X-Client-Token` header (case-insensitive check)
-- SSM parameter cached in global variable during init()
+- Client token loaded during init (SSM parameter or `CLIENT_TOKEN` env override)
 - Bedrock Messages API with anthropic_version: "bedrock-2023-05-31"
 - Extended thinking via `thinking.max_thinking_tokens` parameter
 
@@ -106,12 +106,12 @@ Voice Input → Mode Selection → HTTP POST → Response Parsing → iOS App Cr
 - Uses "Get Contents of URL" action with POST method
 - Headers must include `Content-Type: application/json` and `X-Client-Token`
 - Request body format: `{"text": "...", "mode": "...", "maxTokens": 800}`
-- Response parsing via "Get Value for Key" actions
+- Response parsing via "Get Value for Key" actions (event fields include `startISO`, `endISO`, `location`, `url`, `notes`)
 - Conditional logic based on `action` field in response
 
 ### 4. Bedrock Integration Pattern
 
-Claude Sonnet 4 integration uses Messages API:
+Claude Haiku 4.5 integration uses Messages API:
 
 ```go
 requestBody := map[string]interface{}{
@@ -132,7 +132,7 @@ if req.ThinkingTokens > 0 {
 
 **Critical Implementation Details:**
 
-- Model ID: `anthropic.claude-sonnet-4-20250514-v1:0`
+- Model ID: `anthropic.claude-haiku-4-5-20251001-v1:0`
 - Must use Messages API format (not legacy Completions)
 - System prompt engineering for JSON output
 - Thinking tokens parameter is optional but powerful for complex queries

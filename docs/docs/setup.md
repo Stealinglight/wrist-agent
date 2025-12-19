@@ -52,10 +52,11 @@ AWS_REGION=us-west-2
 AWS_PROFILE=default
 
 # Bedrock Configuration
-BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
+BEDROCK_MODEL_ID=anthropic.claude-haiku-4-5-20251001-v1:0
 
 # Security Configuration
 CLIENT_TOKEN_PARAM_NAME=/wrist-agent/client-token
+CLIENT_TOKEN=your_shared_token_here
 
 # Lambda Configuration
 LAMBDA_TIMEOUT=30
@@ -167,6 +168,11 @@ Expected response:
   "action": "note",
   "title": "Testing the Wrist Agent System",
   "dueISO": null,
+  "startISO": null,
+  "endISO": null,
+  "location": null,
+  "url": null,
+  "notes": null,
   "tags": ["note", "testing"]
 }
 ```
@@ -192,10 +198,10 @@ echo "Your Wrist Agent Token: $TOKEN"
 
 ## Step 6: Enable Bedrock Model Access
 
-Ensure Claude Sonnet 4 is enabled in your AWS region:
+Ensure Claude Haiku 4.5 is enabled in your AWS region:
 
 1. Go to **AWS Bedrock Console** → **Model Access**
-2. Request access to **Anthropic Claude Sonnet 4**
+2. Request access to **Anthropic Claude Haiku 4.5**
 3. Wait for approval (usually instant for Claude models)
 
 ## Troubleshooting

@@ -4,7 +4,7 @@ sidebar_position: 1
 
 # Introduction
 
-Welcome to **Wrist Agent** - a seamless Apple Watch to AWS Bedrock integration system that enables one-tap voice capture, intelligent processing through Claude 3.5 Sonnet, and automatic creation of Notes, Reminders, or Calendar events.
+Welcome to **Wrist Agent** - a seamless Apple Watch to AWS Bedrock integration system that enables one-tap voice capture, intelligent processing through Claude Haiku 4.5, and automatic creation of Notes, Reminders, or Calendar events.
 
 ## What is Wrist Agent?
 
@@ -25,7 +25,7 @@ graph LR
 ## Key Features
 
 - **🎙️ One-Tap Voice Capture**: Direct from Apple Watch with complication support
-- **🧠 AI Processing**: Claude 3.5 Sonnet with optional extended thinking (up to 65K thinking tokens)
+- **🧠 AI Processing**: Claude Haiku 4.5 with optional extended thinking (up to 65K thinking tokens)
 - **📱 Native Integration**: Seamlessly creates Notes, Reminders, and Calendar events
 - **🔒 Secure**: Header-based authentication with SSM Parameter Store
 - **💰 Cost-Optimized**: Lambda Function URLs instead of API Gateway
@@ -37,7 +37,7 @@ graph LR
 ### AWS Infrastructure
 
 - **AWS Lambda**: Go 1.22+ runtime with custom runtime (provided.al2)
-- **AWS Bedrock**: Claude 3.5 Sonnet integration with Messages API
+- **AWS Bedrock**: Claude Haiku 4.5 integration with Messages API
 - **Lambda Function URLs**: Direct HTTPS endpoints with CORS support
 - **SSM Parameter Store**: Secure token management (Standard tier)
 - **IAM Roles**: Least privilege access control
@@ -90,7 +90,7 @@ Enable extended reasoning with up to 65K thinking tokens for complex queries.
 Typical monthly costs for moderate usage (100 requests/day):
 
 - **Lambda Invocations**: ~$0.50
-- **Bedrock Claude 3.5**: ~$15-30 (depending on token usage)
+- **Bedrock Claude Haiku 4.5**: ~$15-30 (depending on token usage)
 - **SSM Parameter Store**: ~$0.05
 - **Total**: **~$15-31/month**
 

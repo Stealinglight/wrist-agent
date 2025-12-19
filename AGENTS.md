@@ -42,7 +42,7 @@ Invoke (once deployed)
 
 curl -X POST "$FUNCTION_URL" \
  -H "Content-Type: application/json" \
- -H "X-Agent-Token: <client token>" \
+ -H "X-Client-Token: <client token>" \
  -d '{"text":"example note","mode":"note","thinkingTokens":0,"maxTokens":800}'
 
 (Function URLs are built-in HTTPS endpoints for Lambda.) ￼
@@ -111,7 +111,7 @@ npm run build     # production build
 ```bash
 curl -X POST "$FUNCTION_URL" \
   -H "Content-Type: application/json" \
-  -H "X-Agent-Token: <client token>" \
+  -H "X-Client-Token: <client token>" \
   -d '{"text":"example note","mode":"note","thinkingTokens":0,"maxTokens":800}'
 ```
 
@@ -133,7 +133,7 @@ curl -X POST "$FUNCTION_URL" \
 ## Security & Configuration Tips
 
 - Never commit secrets. Deploy via GitHub Actions OIDC (short‑lived creds) assuming an AWS role.
-- Protect the Lambda Function URL: require the shared `X-Agent-Token` header (from SSM) and rotate it periodically. Avoid putting the Lambda in a VPC to prevent NAT costs.
+- Protect the Lambda Function URL: require the shared `X-Client-Token` header (from SSM) and rotate it periodically. Avoid putting the Lambda in a VPC to prevent NAT costs.
 
 ## Agent‑Specific Notes
 

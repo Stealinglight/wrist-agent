@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
 // Request payload structure
@@ -29,6 +30,11 @@ type Response struct {
 	Action   string   `json:"action"`
 	Title    string   `json:"title"`
 	DueISO   *string  `json:"dueISO"`
+	StartISO *string  `json:"startISO"`
+	EndISO   *string  `json:"endISO"`
+	Location *string  `json:"location"`
+	URL      *string  `json:"url"`
+	Notes    *string  `json:"notes"`
 	Tags     []string `json:"tags"`
 }
 
@@ -53,12 +59,13 @@ var (
 	bedrockClient  *bedrockruntime.Client
 	modelID        string
 	region         string
+	clientToken    string
 )
 
 func init() {
 	// Load environment variables
 	region = getEnv("BEDROCK_REGION", "us-west-2")
-	modelID = getEnv("MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0")
+	modelID = getEnv("BEDROCK_MODEL_ID", "anthropic.claude-haiku-4-5-20251001-v1:0")
 
 	// Initialize AWS clients
 	cfg, err := initializeAWSConfig()
@@ -67,8 +74,24 @@ func init() {
 	}
 
 	bedrockClient = bedrockruntime.NewFromConfig(cfg)
+	clientToken = strings.TrimSpace(getEnv("CLIENT_TOKEN", ""))
+	if clientToken == "" {
+		paramName := strings.TrimSpace(getEnv("CLIENT_TOKEN_PARAM_NAME", ""))
+		if paramName != "" {
+			token, err := fetchClientTokenFromSSM(cfg, paramName)
+			if err != nil {
+				log.Fatalf("Failed to load client token from SSM: %v", err)
+			}
+			clientToken = token
+		}
+	}
 
 	log.Printf("Initialized Wrist Agent Lambda - Region: %s, Model: %s", region, modelID)
+	if clientToken == "" {
+		log.Printf("Client token auth disabled (no CLIENT_TOKEN or CLIENT_TOKEN_PARAM_NAME set)")
+	} else {
+		log.Printf("Client token auth enabled")
+	}
 }
 
 // initializeAWSConfig sets up AWS configuration
@@ -116,6 +139,11 @@ func handler(ctx context.Context, event events.LambdaFunctionURLRequest) (events
 	if err := validateRequest(&req); err != nil {
 		log.Printf("Request validation failed: %v", err)
 		return corsResponse(400, map[string]string{"error": err.Error()}), nil
+	}
+
+	if err := validateAuthHeader(event.Headers); err != nil {
+		log.Printf("Auth validation failed: %v", err)
+		return corsResponse(401, map[string]string{"error": "Unauthorized"}), nil
 	}
 
 	// Call Bedrock
@@ -243,12 +271,18 @@ func buildSystemPrompt(mode string) string {
   "action": "note|reminder|event|none",
   "title": "extracted or generated title",
   "dueISO": "2025-01-15T09:00:00Z or null",
+  "startISO": "2025-01-15T09:00:00Z or null",
+  "endISO": "2025-01-15T10:00:00Z or null",
+  "location": "event location or null",
+  "url": "https://link.example or null",
+  "notes": "event notes or null",
   "tags": ["tag1", "tag2"]
 }
 
 Guidelines:
 - Extract clear, actionable titles
-- For reminders/events, try to extract dates/times and convert to ISO format
+- For reminders, use dueISO. For events, use startISO/endISO (leave null if unknown)
+- Include event location, URL, and notes if mentioned
 - Use markdown formatting for content
 - Keep responses concise but complete`
 
@@ -263,7 +297,7 @@ Focus on creating reminders with due dates. Look for time references and convert
 		return basePrompt + `
 
 Mode: EVENT  
-Focus on calendar events with specific dates/times. Extract event details and timing. Set action to "event".`
+Focus on calendar events with specific dates/times. Extract event details, timing, location, URL, and notes. Set action to "event".`
 
 	case "research":
 		return basePrompt + `
@@ -314,7 +348,7 @@ func corsResponse(statusCode int, body interface{}) events.LambdaFunctionURLResp
 		Headers: map[string]string{
 			"Content-Type":                 "application/json",
 			"Access-Control-Allow-Origin":  "*",
-			"Access-Control-Allow-Headers": "Content-Type",
+			"Access-Control-Allow-Headers": "Content-Type, X-Client-Token",
 			"Access-Control-Allow-Methods": "POST, OPTIONS",
 			"Access-Control-Max-Age":       "3600",
 		},
@@ -322,11 +356,35 @@ func corsResponse(statusCode int, body interface{}) events.LambdaFunctionURLResp
 	}
 }
 
+func validateAuthHeader(headers map[string]string) error {
+	if clientToken == "" {
+		return nil
+	}
+	for key, value := range headers {
+		if strings.EqualFold(key, "X-Client-Token") && strings.TrimSpace(value) == clientToken {
+			return nil
+		}
+	}
+	return fmt.Errorf("missing or invalid X-Client-Token")
+}
+
 func getEnv(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
 		return value
 	}
 	return defaultValue
+}
+
+func fetchClientTokenFromSSM(cfg aws.Config, paramName string) (string, error) {
+	ssmClient := ssm.NewFromConfig(cfg)
+	output, err := ssmClient.GetParameter(context.TODO(), &ssm.GetParameterInput{
+		Name:           aws.String(paramName),
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		return "", fmt.Errorf("get parameter %s: %w", paramName, err)
+	}
+	return strings.TrimSpace(aws.ToString(output.Parameter.Value)), nil
 }
 
 func main() {

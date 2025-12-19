@@ -201,7 +201,43 @@
 			<key>WFWorkflowActionParameters</key>
 			<dict>
 				<key>WFDictionaryKey</key>
-				<string>dueISO</string>
+				<string>startISO</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.getvalueforkey</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>WFDictionaryKey</key>
+				<string>endISO</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.getvalueforkey</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>WFDictionaryKey</key>
+				<string>location</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.getvalueforkey</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>WFDictionaryKey</key>
+				<string>url</string>
+			</dict>
+		</dict>
+		<dict>
+			<key>WFWorkflowActionIdentifier</key>
+			<string>is.workflow.actions.getvalueforkey</string>
+			<key>WFWorkflowActionParameters</key>
+			<dict>
+				<key>WFDictionaryKey</key>
+				<string>notes</string>
 			</dict>
 		</dict>
 		<dict>
@@ -212,7 +248,15 @@
 				<key>WFCalendarItemTitle</key>
 				<string>{{Get Value for "title"}}</string>
 				<key>WFCalendarItemStartDate</key>
-				<string>{{Get Value for "dueISO"}}</string>
+				<string>{{Get Value for "startISO"}}</string>
+				<key>WFCalendarItemEndDate</key>
+				<string>{{Get Value for "endISO"}}</string>
+				<key>WFCalendarItemLocation</key>
+				<string>{{Get Value for "location"}}</string>
+				<key>WFCalendarItemURL</key>
+				<string>{{Get Value for "url"}}</string>
+				<key>WFCalendarItemNotes</key>
+				<string>{{Get Value for "notes"}}</string>
 			</dict>
 		</dict>
 	</array>

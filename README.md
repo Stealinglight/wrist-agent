@@ -1,6 +1,6 @@
 # Wrist Agent
 
-A seamless Apple Watch to AWS Bedrock integration system that enables one-tap voice capture, intelligent processing through Claude Sonnet 4, and automatic creation of Notes, Reminders, or Calendar events.
+A seamless Apple Watch to AWS Bedrock integration system that enables one-tap voice capture, intelligent processing through Claude Haiku 4.5, and automatic creation of Notes, Reminders, or Calendar events.
 
 ## 🚀 Quick Start
 
@@ -11,7 +11,7 @@ A seamless Apple Watch to AWS Bedrock integration system that enables one-tap vo
 ## ✨ Key Features
 
 - **🎙️ One-Tap Voice Capture**: Direct from Apple Watch with complication support
-- **🧠 AI Processing**: Claude Sonnet 4 with optional extended thinking (up to 65K thinking tokens)
+- **🧠 AI Processing**: Claude Haiku 4.5 with optional extended thinking (up to 65K thinking tokens)
 - **📱 Native Integration**: Seamlessly creates Notes, Reminders, and Calendar events
 - **🔒 Secure**: Header-based authentication with SSM Parameter Store
 - **💰 Cost-Optimized**: Lambda Function URLs instead of API Gateway (~$15-31/month)
@@ -38,7 +38,7 @@ graph LR
 
 - **Apple Watch + Shortcuts**: Voice capture and iOS app integration
 - **AWS Lambda**: Go 1.22+ runtime with Function URLs (ARM64)
-- **AWS Bedrock**: Claude Sonnet 4 with Messages API
+- **AWS Bedrock**: Claude Haiku 4.5 with Messages API
 - **CDK v2**: TypeScript infrastructure as code
 - **GitHub Actions**: OIDC-based CI/CD pipeline
 - **Docusaurus**: Dual documentation (human + agent guides)
@@ -71,7 +71,7 @@ Enable extended reasoning with up to 65K thinking tokens for complex queries.
 
 - **Lambda**: Go 1.22+ with provided.al2 runtime
 - **Function URLs**: Direct HTTPS endpoints with CORS
-- **Bedrock**: Claude Sonnet 4 (anthropic.claude-sonnet-4-20250514-v1:0)
+- **Bedrock**: Claude Haiku 4.5 (anthropic.claude-haiku-4-5-20251001-v1:0)
 - **SSM Parameter Store**: Secure token management
 - **IAM**: Least privilege access control
 
@@ -201,15 +201,23 @@ cd ../cdk && npm test
   "action": "reminder",
   "title": "Call John",
   "dueISO": "2025-01-16T14:00:00Z",
+  "startISO": null,
+  "endISO": null,
+  "location": null,
+  "url": null,
+  "notes": null,
   "tags": ["reminder", "call"]
 }
 ```
+
+Event responses include `startISO`, `endISO`, `location`, `url`, and `notes` when available.
 
 ## 🔒 Security
 
 - **Authentication**: Shared token in SSM Parameter Store
 - **Transport**: HTTPS with TLS 1.2+
 - **IAM**: Least privilege permissions
+- **Bedrock Auth**: IAM role credentials only (no API keys)
 - **CORS**: Restrictive configuration for Apple Shortcuts
 - **No persistent storage**: Stateless Lambda execution
 
@@ -266,7 +274,7 @@ Uses OIDC for secure AWS deployment (no long-lived credentials).
 
 **Bedrock Access Denied**
 
-- Enable Claude Sonnet 4 in Bedrock console
+- Enable Claude Haiku 4.5 in Bedrock console
 - Verify IAM permissions
 
 **CDK Deployment Fails**
@@ -279,13 +287,6 @@ Uses OIDC for secure AWS deployment (no long-lived credentials).
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **AWS CDK Team** - Infrastructure as code framework
-- **Anthropic** - Claude Sonnet 4 language model
-- **Apple** - Shortcuts and Watch integration
-- **Go Team** - Efficient Lambda runtime
 
 ---
 

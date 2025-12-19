@@ -124,8 +124,12 @@ aws ssm get-parameter \
 #### Action 6c: Create Calendar Event
 
 - Get Value for "title" from Contents of URL
-- Get Value for "dueISO" from Contents of URL
-- Create Calendar Event with title and date
+- Get Value for "startISO" from Contents of URL
+- Get Value for "endISO" from Contents of URL
+- Get Value for "location" from Contents of URL
+- Get Value for "url" from Contents of URL
+- Get Value for "notes" from Contents of URL
+- Create Calendar Event with title, start/end, location, URL, and notes
 
 ## Step 3: Configure Advanced Options
 
@@ -196,7 +200,7 @@ Expected: Reminder with extracted due date
 #### Calendar Event Mode
 
 Input: "Schedule dentist appointment next Friday at 2pm"
-Expected: Calendar event with proper date/time
+Expected: Calendar event with start/end time, location, and notes when provided
 
 #### Research Mode
 
@@ -327,4 +331,4 @@ Once your shortcut is working:
 2. **[Explore API Examples](./examples)** - Test advanced features
 3. **[Check Troubleshooting](./troubleshooting)** - Common issues and solutions
 
-Your Apple Watch is now connected to Claude 3.5 Sonnet! Tap your complication and start capturing ideas with the power of AI.
+Your Apple Watch is now connected to Claude Haiku 4.5! Tap your complication and start capturing ideas with the power of AI.

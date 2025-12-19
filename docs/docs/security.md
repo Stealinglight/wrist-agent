@@ -49,13 +49,18 @@ Wrist Agent uses a simple but effective authentication scheme:
 
 ### Initial Token Generation
 
-The CDK deployment creates a random initial token:
+The CDK deployment creates a random initial token (or uses `CLIENT_TOKEN` if you set it):
+
+```typescript
+// In CDK app
+const clientTokenValue = process.env.CLIENT_TOKEN || crypto.randomBytes(32).toString('base64');
+```
 
 ```typescript
 // In CDK stack
-this.tokenParam = new ssm.StringParameter(this, 'ClientToken', {
-  parameterName: config.clientTokenParam,
-  stringValue: 'CHANGE_ME_' + Math.random().toString(36).substring(2, 15),
+const tokenParam = new ssm.StringParameter(this, 'ClientToken', {
+  parameterName: config.clientTokenParamName,
+  stringValue: config.clientTokenValue,
   tier: ssm.ParameterTier.STANDARD,
 });
 ```
@@ -167,76 +172,20 @@ this.tokenParam.grantRead(this.fn);
 - Lambda execution role must have Bedrock permissions
 - Works within AWS environment automatically
 
-### Option 2: Hybrid API Key Authentication (Recommended)
+### Bedrock Authentication
 
-**Best of both worlds: Convenient local development + secure production deployment**
-
-Configure your API key once in `.env` and the system automatically handles both local and production scenarios:
-
-```bash
-# Set in your .env file for both local development and production deployment
-BEDROCK_API_KEY=your_base64_encoded_api_key_here
-```
-
-**How the Hybrid System Works:**
-
-1. **Local Development**: Lambda uses direct environment variable
-2. **Production Deployment**: CDK creates encrypted SSM parameter automatically
-3. **Runtime**: Lambda intelligently chooses the most secure available method
-
-**Lambda Authentication Logic:**
-
-```go
-// Hybrid authentication with automatic fallback
-func initializeAWSConfig() (aws.Config, error) {
-    // Method 1: Direct environment variable (local development)
-    if apiKey := os.Getenv("BEDROCK_API_KEY"); apiKey != "" {
-        return configWithStaticCredentials(apiKey)
-    }
-
-    // Method 2: Encrypted SSM parameter (production)
-    if paramName := os.Getenv("BEDROCK_API_KEY_PARAM"); paramName != "" {
-        return configWithEncryptedSSMParameter(paramName)
-    }
-
-    // Method 3: IAM role fallback
-    return configWithIAMRole()
-}
-```
+Wrist Agent uses IAM role credentials only. There is no Bedrock API key or static credential stored in the repo or Lambda environment.
 
 **Security Features:**
 
-- **Encrypted at Rest**: Production credentials stored as encrypted SSM SecureString parameters
-- **KMS Encryption**: Uses AWS Key Management Service for encryption/decryption
-- **Least Privilege**: Lambda only gets read access to specific parameters
-- **Audit Logging**: All SSM parameter access logged in CloudTrail
-- **Cost Effective**: ~$0.05/month for SSM parameter vs ~$0.40/month for Secrets Manager
-
-**API Key Format:**
-
-- Base64-encoded string
-- Decodes to: `AccessKeyId:SecretAccessKey`
-- Example: `AKIAIOSFODNN7EXAMPLE:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`
+- **No long-lived secrets**: Uses the Lambda execution role
+- **Least privilege**: Grants only `bedrock:InvokeModel` for the configured model
+- **Auditability**: All Bedrock calls are logged in CloudTrail
 
 **Deployment Process:**
 
-1. **Set API Key**: Configure `BEDROCK_API_KEY` in your `.env` file
-2. **Deploy**: Run `npx cdk deploy` - CDK automatically creates encrypted SSM parameter
-3. **Runtime**: Lambda loads from encrypted parameter, falls back to direct env var if needed
-
-**Security Considerations:**
-
-- **Development**: API key in local `.env` file (excluded from git)
-- **Production**: API key encrypted in SSM Parameter Store with KMS
-- **Rotation**: Update SSM parameter value, Lambda picks up change on next cold start
-- **Monitoring**: Set up CloudWatch alarms for unusual API usage patterns
-
-**When to Use This Method:**
-
-- **Most deployments**: Balances security and convenience
-- **Team environments**: Secure sharing via SSM parameters
-- **Compliance requirements**: Encrypted at rest with audit trails
-- **Cost optimization**: Much cheaper than AWS Secrets Manager
+1. **Deploy**: Run `npx cdk deploy` with an IAM role that has Bedrock access
+2. **Runtime**: Lambda uses its execution role; no API keys are stored or loaded
 
 ### Resource-Level Permissions
 
@@ -382,7 +331,7 @@ For specific compliance requirements:
 ```bash
 # Deploy to EU region for GDPR
 export AWS_REGION=eu-west-1
-export BEDROCK_MODEL_ID=anthropic.claude-sonnet-4-20250514-v1:0
+export BEDROCK_MODEL_ID=anthropic.claude-haiku-4-5-20251001-v1:0
 
 cd cdk
 npx cdk deploy
