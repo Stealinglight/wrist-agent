@@ -15,8 +15,11 @@ const sidebars: SidebarsConfig = {
   tutorialSidebar: [
     'intro',
     'setup',
-    'security',
     'apple-shortcut',
+    'security',
+    'examples',
+    'troubleshooting',
+    'deployment',
     'agent-guide',
   ],
 };
