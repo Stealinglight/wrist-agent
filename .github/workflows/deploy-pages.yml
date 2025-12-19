@@ -6,6 +6,11 @@ on:
     paths:
       - 'docs/**'
       - '.github/workflows/deploy-pages.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-pages.yml'
 
 permissions:
   pages: write
@@ -17,8 +22,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  validate:
+    name: Validate documentation
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Setup Node.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: docs/package.json
+
+      # Install dependencies
+      - name: Install dependencies
+        run: npm ci
+        working-directory: docs
+
+      # Build Docusaurus site to validate
+      - name: Build Docusaurus site
+        run: npm run build
+        working-directory: docs
+
+      # Check for broken links in built site
+      - name: Check for broken links
+        run: |
+          npm install -g broken-link-checker
+          npx broken-link-checker http://localhost:3000 --recursive --ordered --exclude-external || true
+        working-directory: docs
+
   deploy:
     name: Publish static docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

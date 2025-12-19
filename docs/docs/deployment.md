@@ -21,7 +21,7 @@ Deploy directly from your development machine using AWS CDK.
 
 ```bash
 # Clone and setup
-git clone https://github.com/your-username/wrist-agent.git
+git clone https://github.com/Stealinglight/wrist-agent.git
 cd wrist-agent
 
 # Install dependencies
