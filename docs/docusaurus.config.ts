@@ -11,7 +11,7 @@ const config: Config = {
   url: 'https://stealinglight.github.io',
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/wrist-agent/intro',
+  baseUrl: '/wrist-agent/',
 
   // GitHub pages deployment config.
   organizationName: 'Stealinglight',
@@ -79,7 +79,7 @@ const config: Config = {
           items: [
             {
               label: 'Introduction',
-              to: '/intro',
+              to: '/',
             },
             {
               label: 'Setup',
@@ -115,6 +115,11 @@ const config: Config = {
         },
       ],
       copyright: `Copyright © ${new Date().getFullYear()} Wrist Agent. Built with Docusaurus.`,
+    },
+    colorMode: {
+      defaultMode: 'dark',
+      disableSwitch: false,
+      respectPrefersColorScheme: true,
     },
     prism: {
       theme: prismThemes.github,
