@@ -68,11 +68,6 @@ func init() {
 
 	bedrockClient = bedrockruntime.NewFromConfig(cfg)
 
-	// Load client token from SSM
-	if err := loadClientToken(); err != nil {
-		log.Fatalf("Failed to load client token: %v", err)
-	}
-
 	log.Printf("Initialized Wrist Agent Lambda - Region: %s, Model: %s", region, modelID)
 }
 
@@ -108,16 +103,6 @@ func handler(ctx context.Context, event events.LambdaFunctionURLRequest) (events
 	// Only allow POST requests
 	if event.RequestContext.HTTP.Method != "POST" {
 		return corsResponse(405, map[string]string{"error": "Method not allowed"}), nil
-	}
-
-	// Validate authentication
-	authHeader := event.Headers["x-client-token"]
-	if authHeader == "" {
-		authHeader = event.Headers["X-Client-Token"] // Try capitalized version
-	}
-	if authHeader != clientToken {
-		log.Printf("Authentication failed - invalid or missing token")
-		return corsResponse(401, map[string]string{"error": "Invalid or missing authentication token"}), nil
 	}
 
 	// Parse request body
@@ -329,7 +314,7 @@ func corsResponse(statusCode int, body interface{}) events.LambdaFunctionURLResp
 		Headers: map[string]string{
 			"Content-Type":                 "application/json",
 			"Access-Control-Allow-Origin":  "*",
-			"Access-Control-Allow-Headers": "Content-Type, X-Client-Token",
+			"Access-Control-Allow-Headers": "Content-Type",
 			"Access-Control-Allow-Methods": "POST, OPTIONS",
 			"Access-Control-Max-Age":       "3600",
 		},

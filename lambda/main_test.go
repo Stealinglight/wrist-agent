@@ -95,7 +95,7 @@ func TestExtractTitle(t *testing.T) {
 			name:    "long title truncation",
 			content: "This is a very long title that should be truncated because it exceeds the fifty character limit",
 			mode:    "note",
-			want:    "This is a very long title that should be tru...",
+			want:    "This is a very long title that should be trunca...",
 		},
 		{
 			name:    "fallback title",
