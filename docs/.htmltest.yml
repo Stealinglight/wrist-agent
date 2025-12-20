@@ -1,0 +1,22 @@
+# htmltest configuration for Docusaurus site with /wrist-agent/ baseUrl
+DirectoryPath: build
+CheckExternal: false
+CheckInternal: true
+CheckInternalHash: true
+# Docusaurus builds with baseUrl: '/wrist-agent/' for GitHub Pages deployment.
+# When deployed to GitHub Pages, the site is served at https://stealinglight.github.io/wrist-agent/
+# However, in the build/ directory, files are at root level without the /wrist-agent/ prefix.
+# We ignore links starting with /wrist-agent/ because:
+# 1. They are absolute paths for the deployed site (GitHub Pages)
+# 2. htmltest checks the local build/ directory structure (without /wrist-agent/ prefix)
+# 3. These links are validated when the site is deployed and served by GitHub Pages
+# All internal navigation links (like ./setup, ../examples) are still validated correctly.
+IgnoreURLs:
+  - "^https://github.com/"
+  - "^https://aws.amazon.com/"
+  - "^https://docs.aws.amazon.com/"
+  - "^https://v8.dev/"
+  - "^https://zoom.us/"
+  - "^/wrist-agent/"  # Ignore absolute paths with baseUrl (validated in production)
+IgnoreDirectoryMissingTrailingSlash: true
+IgnoreInternalEmptyHash: true

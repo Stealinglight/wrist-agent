@@ -146,6 +146,9 @@ cdk.context.json
 # Documentation build
 docs/build/
 docs/.docusaurus/
+docs/htmltest
+docs/htmltest_*.tar.gz
+docs/tmp/
 
 # IDE
 .idea/

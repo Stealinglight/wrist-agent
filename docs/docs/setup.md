@@ -21,7 +21,7 @@ Before you begin, ensure you have:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/wrist-agent.git
+git clone https://github.com/Stealinglight/wrist-agent.git
 cd wrist-agent
 
 # Install CDK dependencies
