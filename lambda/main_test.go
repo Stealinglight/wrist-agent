@@ -45,6 +45,65 @@ func TestValidateRequest(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "valid reminder request",
+			req: Req{
+				Text: "Remind me to call mom",
+				Mode: "reminder",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid event request",
+			req: Req{
+				Text: "Schedule meeting tomorrow at 3pm",
+				Mode: "event",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid research request",
+			req: Req{
+				Text: "Research quantum computing",
+				Mode: "research",
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid deepthink request",
+			req: Req{
+				Text: "Analyze the implications of AI",
+				Mode: "deepthink",
+			},
+			wantErr: false,
+		},
+		{
+			name: "negative thinking tokens",
+			req: Req{
+				Text:           "Test",
+				Mode:           "note",
+				ThinkingTokens: -1,
+			},
+			wantErr: true,
+		},
+		{
+			name: "excessive thinking tokens",
+			req: Req{
+				Text:           "Test",
+				Mode:           "note",
+				ThinkingTokens: 100000,
+			},
+			wantErr: true,
+		},
+		{
+			name: "excessive max tokens",
+			req: Req{
+				Text:      "Test",
+				Mode:      "note",
+				MaxTokens: 10000,
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -57,8 +116,8 @@ func TestValidateRequest(t *testing.T) {
 	}
 }
 
-func TestCorsResponse(t *testing.T) {
-	resp := corsResponse(200, map[string]string{"test": "value"})
+func TestApiResponse(t *testing.T) {
+	resp := apiResponse(200, map[string]string{"test": "value"})
 
 	if resp.StatusCode != 200 {
 		t.Errorf("Expected status code 200, got %d", resp.StatusCode)
@@ -76,6 +135,28 @@ func TestCorsResponse(t *testing.T) {
 			t.Errorf("Expected header %s to exist", header)
 		}
 	}
+
+	// Verify body is JSON
+	var bodyMap map[string]string
+	err := json.Unmarshal([]byte(resp.Body), &bodyMap)
+	if err != nil {
+		t.Errorf("Expected valid JSON body, got error: %v", err)
+	}
+	if bodyMap["test"] != "value" {
+		t.Errorf("Expected body test='value', got '%s'", bodyMap["test"])
+	}
+}
+
+func TestApiResponse_NilBody(t *testing.T) {
+	resp := apiResponse(204, nil)
+
+	if resp.StatusCode != 204 {
+		t.Errorf("Expected status code 204, got %d", resp.StatusCode)
+	}
+
+	if resp.Body != "" {
+		t.Errorf("Expected empty body for nil input, got '%s'", resp.Body)
+	}
 }
 
 func TestExtractTitle(t *testing.T) {
@@ -92,16 +173,34 @@ func TestExtractTitle(t *testing.T) {
 			want:    "Meeting Notes",
 		},
 		{
+			name:    "h2 markdown header",
+			content: "## Project Update\nDetails",
+			mode:    "note",
+			want:    "Project Update",
+		},
+		{
 			name:    "long title truncation",
 			content: "This is a very long title that should be truncated because it exceeds the fifty character limit",
 			mode:    "note",
 			want:    "This is a very long title that should be trunca...",
 		},
 		{
-			name:    "fallback title",
+			name:    "fallback title for note",
+			content: "",
+			mode:    "note",
+			want:    "Wrist Agent Note",
+		},
+		{
+			name:    "fallback title for reminder",
 			content: "",
 			mode:    "reminder",
 			want:    "Wrist Agent Reminder",
+		},
+		{
+			name:    "skip json content",
+			content: "{\"key\": \"value\"}\nActual Title",
+			mode:    "note",
+			want:    "Actual Title",
 		},
 	}
 
@@ -137,21 +236,83 @@ func TestRequestParsing(t *testing.T) {
 	}
 }
 
-// Mock test for handler OPTIONS request
-func TestHandlerOPTIONS(t *testing.T) {
-	// Skip this test in CI since it requires AWS credentials
-	if testing.Short() {
-		t.Skip("Skipping integration test in short mode")
+func TestRequestParsing_WithThinkingTokens(t *testing.T) {
+	testJSON := `{"text": "Deep analysis request", "mode": "deepthink", "maxTokens": 2000, "thinkingTokens": 10000}`
+
+	var req Req
+	err := json.Unmarshal([]byte(testJSON), &req)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal test JSON: %v", err)
 	}
 
-	event := events.LambdaFunctionURLRequest{
-		RequestContext: events.LambdaFunctionURLRequestContext{
-			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-				Method: "OPTIONS",
-			},
+	if req.ThinkingTokens != 10000 {
+		t.Errorf("Expected thinkingTokens 10000, got %d", req.ThinkingTokens)
+	}
+}
+
+func TestBuildSystemPrompt(t *testing.T) {
+	modes := []string{"note", "reminder", "event", "research", "deepthink"}
+
+	for _, mode := range modes {
+		t.Run(mode, func(t *testing.T) {
+			prompt := buildSystemPrompt(mode)
+			if prompt == "" {
+				t.Errorf("buildSystemPrompt(%s) returned empty string", mode)
+			}
+			// Should contain the base JSON format
+			if !contains(prompt, "markdown") {
+				t.Errorf("buildSystemPrompt(%s) missing 'markdown' field", mode)
+			}
+			if !contains(prompt, "action") {
+				t.Errorf("buildSystemPrompt(%s) missing 'action' field", mode)
+			}
+		})
+	}
+}
+
+func TestGetEnv(t *testing.T) {
+	// Test default value
+	result := getEnv("NON_EXISTENT_VAR_12345", "default")
+	if result != "default" {
+		t.Errorf("Expected 'default', got '%s'", result)
+	}
+}
+
+// Mock test for handler with API Gateway event
+func TestHandlerEventStructure(t *testing.T) {
+	// This test verifies the event structure is correct for API Gateway
+	event := events.APIGatewayProxyRequest{
+		HTTPMethod: "POST",
+		Path:       "/invoke",
+		Headers: map[string]string{
+			"Content-Type":   "application/json",
+			"X-Client-Token": "test-token",
 		},
+		Body: `{"text": "Test message", "mode": "note"}`,
 	}
 
-	// This would normally require proper AWS setup, so we just test the structure
-	_ = event
+	// Verify we can access all expected fields
+	if event.HTTPMethod != "POST" {
+		t.Errorf("Expected POST method, got %s", event.HTTPMethod)
+	}
+	if event.Path != "/invoke" {
+		t.Errorf("Expected /invoke path, got %s", event.Path)
+	}
+	if event.Headers["X-Client-Token"] != "test-token" {
+		t.Errorf("Expected test-token, got %s", event.Headers["X-Client-Token"])
+	}
+}
+
+// Helper function
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

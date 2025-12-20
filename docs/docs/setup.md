@@ -6,16 +6,53 @@ sidebar_position: 2
 
 This guide will help you deploy the complete Wrist Agent infrastructure on AWS and configure it for use with your Apple Watch.
 
+## Architecture Overview
+
+```mermaid
+flowchart TB
+    subgraph Client["📱 Client Layer"]
+        AW[Apple Watch]
+        AS[Apple Shortcut]
+    end
+    
+    subgraph AWS["☁️ AWS Cloud"]
+        subgraph API["API Gateway"]
+            AG[REST API]
+            AUTH[Lambda Authorizer]
+        end
+        
+        subgraph Compute["Lambda Functions"]
+            HANDLER[Handler Function]
+        end
+        
+        subgraph Storage["Storage & AI"]
+            SSM[(SSM Parameter Store)]
+            BR[Amazon Bedrock]
+        end
+    end
+    
+    AW --> AS
+    AS -->|HTTPS POST| AG
+    AG -->|Validate Token| AUTH
+    AUTH -->|Read Token| SSM
+    AUTH -->|Allow/Deny| AG
+    AG -->|Invoke| HANDLER
+    HANDLER -->|Claude Haiku 4.5| BR
+    HANDLER -->|Response| AG
+    AG -->|JSON| AS
+```
+
 ## Prerequisites
 
 Before you begin, ensure you have:
 
-- **AWS Account** with appropriate permissions
-- **AWS CLI** configured with your credentials
-- **Node.js** 18+ and npm installed
-- **Go** 1.22+ installed
-- **Git** for cloning the repository
-- **Apple Developer Account** (free tier sufficient)
+| Requirement | Version | Purpose                     |
+| ----------- | ------- | --------------------------- |
+| AWS Account | -       | Host infrastructure         |
+| AWS CLI     | 2.x     | Deploy and manage resources |
+| Node.js     | 18+     | CDK and build tools         |
+| Go          | 1.22+   | Lambda functions            |
+| Git         | -       | Clone repository            |
 
 ## Step 1: Clone and Setup Repository
 
@@ -28,8 +65,12 @@ cd wrist-agent
 cd cdk
 npm install
 
-# Install Go dependencies
+# Install Go dependencies for main handler
 cd ../lambda
+go mod tidy
+
+# Install Go dependencies for authorizer
+cd ../lambda-authorizer
 go mod tidy
 
 # Return to project root
@@ -65,6 +106,30 @@ LAMBDA_MEMORY=256
 
 ## Step 3: Deploy Infrastructure
 
+```mermaid
+flowchart LR
+    subgraph Local["💻 Local Machine"]
+        CDK[CDK App]
+        BUILD[npm run build]
+    end
+    
+    subgraph Deploy["🚀 Deployment"]
+        SYNTH[cdk synth]
+        DEPLOY[cdk deploy]
+    end
+    
+    subgraph AWS["☁️ AWS"]
+        CF[CloudFormation]
+        STACK[WristAgentStack]
+    end
+    
+    CDK --> BUILD
+    BUILD --> SYNTH
+    SYNTH --> DEPLOY
+    DEPLOY --> CF
+    CF --> STACK
+```
+
 ### Option A: Local Deployment
 
 ```bash
@@ -78,7 +143,7 @@ npx cdk bootstrap
 npm run build
 npx cdk deploy
 
-# Note the Function URL from the output
+# Note the API Gateway URL from the output
 ```
 
 ### Option B: GitHub Actions Deployment
@@ -86,7 +151,6 @@ npx cdk deploy
 1. **Fork the repository** to your GitHub account
 
 2. **Configure GitHub Secrets**:
-
    - Go to Repository Settings → Secrets and variables → Actions
    - Add `AWS_ROLE_ARN` with your OIDC role ARN
 
@@ -135,26 +199,25 @@ aws iam attach-role-policy \
 
 4. **Push to main branch** to trigger deployment
 
-   > **Note:** The GitHub Actions workflow automatically runs `cdk bootstrap` before deployment, so no manual bootstrap is required.
-
 ## Step 4: Verify Deployment
 
 After deployment completes, you should see outputs similar to:
 
 ```
 Outputs:
-WristAgentStack.FunctionUrl = https://abc123def456.lambda-url.us-west-2.on.aws/
+WristAgentStack.ApiEndpoint = https://abc123def.execute-api.us-west-2.amazonaws.com/prod/
+WristAgentStack.InvokeEndpoint = https://abc123def.execute-api.us-west-2.amazonaws.com/prod/invoke
 WristAgentStack.TokenParameterName = /wrist-agent/client-token
 ```
 
-Test the Function URL:
+Test the API endpoint:
 
 ```bash
 # Get the client token
 TOKEN=$(aws ssm get-parameter --name "/wrist-agent/client-token" --with-decryption --query 'Parameter.Value' --output text)
 
 # Test the endpoint
-curl -X POST "https://YOUR_FUNCTION_URL" \
+curl -X POST "https://YOUR_API_ENDPOINT/prod/invoke" \
   -H "Content-Type: application/json" \
   -H "X-Client-Token: $TOKEN" \
   -d '{"text": "Create a note about testing the Wrist Agent system", "mode": "note"}'
@@ -164,7 +227,7 @@ Expected response:
 
 ```json
 {
-  "markdown": "# Testing the Wrist Agent System\n\n✅ Successfully tested the Wrist Agent integration...",
+  "markdown": "# Testing the Wrist Agent System\n\n✅ Successfully tested...",
   "action": "note",
   "title": "Testing the Wrist Agent System",
   "dueISO": null,
@@ -178,6 +241,22 @@ Expected response:
 ```
 
 ## Step 5: Configure Authentication Token
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant CLI as AWS CLI
+    participant SSM as SSM Parameter Store
+    participant Shortcut as Apple Shortcut
+    
+    User->>CLI: openssl rand -base64 32
+    CLI-->>User: New Token
+    User->>CLI: aws ssm put-parameter
+    CLI->>SSM: Store Token
+    SSM-->>CLI: Success
+    User->>Shortcut: Configure X-Client-Token
+    Note over Shortcut: Token stored securely
+```
 
 For security, update the default authentication token:
 
@@ -204,29 +283,36 @@ Ensure Claude Haiku 4.5 is enabled in your AWS region:
 2. Request access to **Anthropic Claude Haiku 4.5**
 3. Wait for approval (usually instant for Claude models)
 
+## Deployed Resources
+
+| Resource             | Type                 | Purpose                        |
+| -------------------- | -------------------- | ------------------------------ |
+| WristAgentApi        | API Gateway REST API | HTTPS endpoint with throttling |
+| WristAgentHandler    | Lambda Function      | Process requests via Bedrock   |
+| WristAgentAuthorizer | Lambda Function      | Validate authentication tokens |
+| ClientToken          | SSM Parameter        | Secure token storage           |
+| ApiGatewayLogs       | CloudWatch Log Group | API access logging             |
+
 ## Troubleshooting
 
 ### Common Issues
 
-**Function URL returns 401 Unauthorized**
-
+**API returns 401 Unauthorized**
 - Verify the token matches the SSM parameter
 - Check the header name is exactly `X-Client-Token`
+- Ensure the token hasn't been rotated without updating your Shortcut
+
+**API returns 403 Forbidden**
+- The Lambda Authorizer rejected the request
+- Check CloudWatch logs for the authorizer function
 
 **Bedrock access denied errors**
-
 - Ensure model access is enabled in Bedrock console
 - Verify IAM permissions include `bedrock:InvokeModel`
 
 **CDK deployment fails**
-
 - Check AWS credentials and permissions
 - Ensure CDK is bootstrapped: `npx cdk bootstrap`
-
-**Lambda timeout errors**
-
-- Increase timeout in `.env`: `LAMBDA_TIMEOUT=60`
-- Redeploy with: `npx cdk deploy`
 
 ### Resource Cleanup
 
@@ -237,7 +323,9 @@ cd cdk
 npx cdk destroy
 ```
 
-**Warning**: This will delete all resources including the SSM parameter with your token.
+:::warning
+This will delete all resources including the SSM parameter with your token.
+:::
 
 ## Next Steps
 
@@ -247,23 +335,14 @@ Now that your infrastructure is deployed:
 2. **[Review Security Settings](./security)** - Understand the security model
 3. **[Explore API Examples](./examples)** - Test different modes and features
 
-## Cost Monitoring
+## Cost Estimate
 
-Set up billing alerts to monitor costs:
+| Service             | Estimated Monthly Cost      |
+| ------------------- | --------------------------- |
+| API Gateway         | ~$3.50/million requests     |
+| Lambda (Handler)    | ~$0.10 for 1000 invocations |
+| Lambda (Authorizer) | ~$0.02 for 1000 invocations |
+| SSM Parameter       | Free                        |
+| Bedrock             | ~$0.25/1000 input tokens    |
 
-```bash
-# Create a CloudWatch alarm for estimated charges
-aws cloudwatch put-metric-alarm \
-  --alarm-name "WristAgentCosts" \
-  --alarm-description "Alert when Wrist Agent costs exceed $50" \
-  --metric-name EstimatedCharges \
-  --namespace AWS/Billing \
-  --statistic Maximum \
-  --period 86400 \
-  --threshold 50 \
-  --comparison-operator GreaterThanThreshold \
-  --dimensions Name=Currency,Value=USD \
-  --evaluation-periods 1
-```
-
-Your Wrist Agent system is now ready! Head to the [Apple Shortcut guide](./apple-shortcut) to complete the integration.
+**Total for light usage (~1000 requests/month): < $1.00**

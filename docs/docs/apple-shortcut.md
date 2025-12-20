@@ -8,33 +8,45 @@ This guide will help you create and configure the Apple Shortcut that connects y
 
 ## Overview
 
-The Apple Shortcut acts as the bridge between your Apple Watch dictation and the AWS Lambda function. It captures voice input, sends it to your deployed endpoint, and processes the response to create Notes, Reminders, or Calendar events.
-
 ```mermaid
-graph TD
-    A[Apple Watch] --> B[Voice Dictation]
-    B --> C[Shortcut Trigger]
-    C --> D[HTTP Request]
-    D --> E[AWS Lambda]
-    E --> F[Response Processing]
-    F --> G{Action Type}
-    G -->|note| H[Create Note]
-    G -->|reminder| I[Create Reminder]
-    G -->|event| J[Create Calendar Event]
+flowchart LR
+    subgraph Watch["⌚ Apple Watch"]
+        VOICE[Voice Input]
+        COMP[Complication]
+    end
+    
+    subgraph Shortcut["📱 Shortcut"]
+        DICT[Dictation]
+        MODE[Mode Selection]
+        HTTP[HTTP Request]
+        PARSE[Parse Response]
+    end
+    
+    subgraph Actions["✅ Actions"]
+        NOTE[Create Note]
+        REMIND[Create Reminder]
+        EVENT[Create Event]
+    end
+    
+    COMP --> VOICE
+    VOICE --> DICT
+    DICT --> MODE
+    MODE --> HTTP
+    HTTP --> PARSE
+    PARSE --> NOTE
+    PARSE --> REMIND
+    PARSE --> EVENT
 ```
 
-## Step 1: Get Your Configuration
+## Prerequisites
 
-Before creating the shortcut, gather these details from your AWS deployment:
-
-1. **Function URL**: From CDK output or AWS Console
-2. **Authentication Token**: From SSM Parameter Store
+Before configuring the shortcut, gather these details from your AWS deployment:
 
 ```bash
-# Get your Function URL
+# Get your API Gateway URL
 aws cloudformation describe-stacks \
   --stack-name WristAgentStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`FunctionUrl`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`InvokeEndpoint`].OutputValue' \
   --output text
 
 # Get your authentication token
@@ -45,290 +57,322 @@ aws ssm get-parameter \
   --output text
 ```
 
-## Step 2: Create the Basic Shortcut
+## Step 1: Download or Create Shortcut
 
-### Method A: Import Shortcut (Recommended)
+### Option A: Import Pre-built Shortcut (Recommended)
 
-1. **Download the shortcut file**: [WristAgent.shortcut](../static/shortcuts/WristAgent.shortcut)
-2. **Open in Shortcuts app** on your iPhone
-3. **Configure parameters** (see Configuration section below)
+1. Download [WristAgent.shortcut](../static/shortcuts/WristAgent.shortcut)
+2. Open in Shortcuts app on iPhone
+3. Configure your API endpoint and token (Step 2)
 
-### Method B: Manual Creation
+### Option B: Create Manually
 
-1. **Open Shortcuts app** on iPhone
-2. **Tap "+" to create new shortcut**
-3. **Add actions in this order**:
+Create a new shortcut with these actions:
 
-#### Action 1: Get Text from Input
+```mermaid
+flowchart TD
+    A[1. Dictate Text] --> B[2. Choose Mode]
+    B --> C[3. Get Contents of URL]
+    C --> D[4. Get Dictionary Value]
+    D --> E{5. Switch on Action}
+    E -->|note| F[Create Note]
+    E -->|reminder| G[Create Reminder]
+    E -->|event| H[Create Calendar Event]
+```
 
-- Search for "Get Text from Input"
-- Set source to "Ask for Input"
-- Input Type: "Text"
-- Prompt: "What would you like to record?"
-- Allow Multiline: ON
+## Step 2: Configure Shortcut
 
-#### Action 2: Text Action for Mode Selection
+### Required Settings
 
-- Search for "Ask for Input"
-- Input Type: "Choose from Menu"
-- Prompt: "Select mode:"
-- Menu Items:
-  - "Note" → Set variable to "note"
-  - "Reminder" → Set variable to "reminder"
-  - "Calendar Event" → Set variable to "event"
-  - "Research" → Set variable to "research"
-  - "Deep Think" → Set variable to "deepthink"
+| Setting            | Value                                                                 |
+| ------------------ | --------------------------------------------------------------------- |
+| **API URL**        | `https://YOUR_API_ID.execute-api.us-west-2.amazonaws.com/prod/invoke` |
+| **Method**         | POST                                                                  |
+| **Content-Type**   | application/json                                                      |
+| **X-Client-Token** | Your token from SSM                                                   |
 
-#### Action 3: Get Contents of URL
-
-- URL: `https://YOUR_FUNCTION_URL`
-- Method: POST
-- Headers:
-  - `Content-Type`: `application/json`
-  - `X-Client-Token`: `YOUR_TOKEN`
-- Request Body:
+### HTTP Request Configuration
 
 ```json
 {
-  "text": "TEXT_FROM_STEP_1",
-  "mode": "MODE_FROM_STEP_2",
+  "text": "[Dictated Text]",
+  "mode": "[Selected Mode]",
   "maxTokens": 800,
   "thinkingTokens": 0
 }
 ```
 
-#### Action 4: Get Value for Key
+### Mode Options
 
-- Get Value for: "action" in Contents of URL
+| Mode        | Use Case              | Action                  |
+| ----------- | --------------------- | ----------------------- |
+| `note`      | General notes, ideas  | Creates Apple Note      |
+| `reminder`  | Tasks with due dates  | Creates Reminder        |
+| `event`     | Calendar appointments | Creates Calendar Event  |
+| `research`  | Detailed information  | Creates detailed Note   |
+| `deepthink` | Complex analysis      | Creates analytical Note |
 
-#### Action 5: Choose from Menu (Based on Action)
+## Step 3: Shortcut Actions Detail
 
-- Input: Value from Step 4
-- Cases:
-  - **note**: Create Note action
-  - **reminder**: Create Reminder action
-  - **event**: Create Calendar Event action
+### Action 1: Dictate Text
 
-#### Action 6a: Create Note
+```
+Action: Dictate Text
+Settings:
+  - Stop Listening: After Pause
+  - Language: Default
+Output: Dictated Text
+```
 
-- Get Value for "markdown" from Contents of URL
-- Get Value for "title" from Contents of URL
-- Create Note with title and markdown content
+### Action 2: Choose from Menu
 
-#### Action 6b: Create Reminder
+```
+Action: Choose from Menu
+Prompt: "Select mode:"
+Options:
+  - 📝 Note → "note"
+  - ⏰ Reminder → "reminder"
+  - 📅 Event → "event"
+  - 🔍 Research → "research"
+  - 🧠 Deep Think → "deepthink"
+Output: Selected Mode
+```
 
-- Get Value for "title" from Contents of URL
-- Get Value for "dueISO" from Contents of URL
-- Create Reminder with title and due date
+### Action 3: Get Contents of URL
 
-#### Action 6c: Create Calendar Event
+```
+Action: Get Contents of URL
+URL: https://YOUR_API_ID.execute-api.us-west-2.amazonaws.com/prod/invoke
+Method: POST
+Headers:
+  Content-Type: application/json
+  X-Client-Token: YOUR_TOKEN_HERE
+Request Body (JSON):
+  {
+    "text": [Dictated Text],
+    "mode": [Selected Mode],
+    "maxTokens": 800
+  }
+Output: API Response
+```
 
-- Get Value for "title" from Contents of URL
-- Get Value for "startISO" from Contents of URL
-- Get Value for "endISO" from Contents of URL
-- Get Value for "location" from Contents of URL
-- Get Value for "url" from Contents of URL
-- Get Value for "notes" from Contents of URL
-- Create Calendar Event with title, start/end, location, URL, and notes
+### Action 4: Parse Response
 
-## Step 3: Configure Advanced Options
+```
+Action: Get Dictionary Value
+Key: action
+From: API Response
+Output: Action Type
 
-### Extended Thinking Mode
+Action: Get Dictionary Value
+Key: title
+From: API Response
+Output: Title
 
-For complex queries, enable extended thinking:
+Action: Get Dictionary Value
+Key: markdown
+From: API Response
+Output: Content
+```
+
+### Action 5: Create Output
+
+```mermaid
+flowchart TD
+    subgraph Note["📝 Note Action"]
+        N1[Get 'title' from response]
+        N2[Get 'markdown' from response]
+        N3[Create Note with title + content]
+    end
+    
+    subgraph Reminder["⏰ Reminder Action"]
+        R1[Get 'title' from response]
+        R2[Get 'dueISO' from response]
+        R3[Create Reminder with title + due date]
+    end
+    
+    subgraph Event["📅 Event Action"]
+        E1[Get 'title' from response]
+        E2[Get 'startISO' from response]
+        E3[Get 'endISO' from response]
+        E4[Get 'location' from response]
+        E5[Create Event with all fields]
+    end
+```
+
+## Step 4: Add Watch Complication
+
+### Configure Watch Face
+
+1. Open **Watch** app on iPhone
+2. Select **My Watch** → **Clock**
+3. Choose your watch face
+4. Tap **Complications**
+5. Select a slot → **Shortcuts** → **Wrist Agent**
+
+### Supported Complications
+
+| Type      | Size     | Appearance         |
+| --------- | -------- | ------------------ |
+| Corner    | Small    | Icon only          |
+| Circular  | Medium   | Icon + name        |
+| Modular   | Large    | Icon + description |
+| Infograph | Variable | Customizable       |
+
+## Step 5: Test the Integration
+
+### Quick Test
+
+1. Tap the complication on your Apple Watch
+2. Say: "Create a note about testing Wrist Agent"
+3. Select "📝 Note"
+4. Verify a note is created
+
+### Test Each Mode
+
+```mermaid
+flowchart LR
+    subgraph Tests["Test Cases"]
+        T1["📝 'Meeting notes from today'"]
+        T2["⏰ 'Remind me to call mom at 3pm'"]
+        T3["📅 'Dentist appointment Friday 2pm'"]
+        T4["🔍 'Research quantum computing'"]
+        T5["🧠 'Analyze pros and cons of remote work'"]
+    end
+```
+
+| Input                                    | Expected Mode | Expected Output        |
+| ---------------------------------------- | ------------- | ---------------------- |
+| "Note about project ideas"               | note          | Apple Note created     |
+| "Remind me to buy groceries tomorrow"    | reminder      | Reminder with due date |
+| "Meeting with team Friday 10am"          | event         | Calendar event         |
+| "Research best practices for API design" | research      | Detailed note          |
+| "Should I learn Rust or Go?"             | deepthink     | Analytical note        |
+
+## Advanced Configuration
+
+### Extended Thinking
+
+For complex analysis, enable extended thinking:
 
 ```json
 {
-  "text": "Analyze the pros and cons of renewable energy",
+  "text": "Analyze the implications of AI on employment",
   "mode": "deepthink",
   "maxTokens": 2000,
   "thinkingTokens": 10000
 }
 ```
 
-### Custom Modes
+### Quick Shortcuts
 
-Add custom handling for specific use cases:
+Create simplified shortcuts for common tasks:
 
-```javascript
-// In your shortcut logic
-if (mode === 'quick-note') {
-  // Skip mode selection, default to note
-  mode = 'note';
-  maxTokens = 400;
-}
-```
-
-## Step 4: Add Watch Complication
-
-1. **Open Watch app** on iPhone
-2. **Go to My Watch tab**
-3. **Select your watch face**
-4. **Tap "Complications"**
-5. **Choose a complication slot**
-6. **Select "Shortcuts"**
-7. **Choose your Wrist Agent shortcut**
-
-### Supported Complications
-
-- **Corner**: Small icon launch
-- **Circular**: Round button with icon
-- **Modular Large**: Text display with launch
-- **Infograph**: Multiple size options
-
-## Step 5: Testing and Validation
-
-### Test the Basic Flow
-
-1. **Launch shortcut** from Watch or iPhone
-2. **Speak your request**: "Create a note about today's meeting with John"
-3. **Select mode**: Choose "Note"
-4. **Verify creation**: Check that a note was created with proper formatting
-
-### Test Different Modes
-
-#### Note Mode
-
-Input: "Meeting notes from today's standup"
-Expected: Well-formatted note with title and content
-
-#### Reminder Mode
-
-Input: "Remind me to call mom tomorrow at 3pm"
-Expected: Reminder with extracted due date
-
-#### Calendar Event Mode
-
-Input: "Schedule dentist appointment next Friday at 2pm"
-Expected: Calendar event with start/end time, location, and notes when provided
-
-#### Research Mode
-
-Input: "What are the latest developments in quantum computing?"
-Expected: Detailed note with research information
-
-#### Deep Think Mode
-
-Input: "Should I buy or rent a house in San Francisco?"
-Expected: Thoughtful analysis with pros/cons
-
-### Common Issues and Solutions
-
-**Shortcut fails with 401 error**
-
-- Verify token is correctly configured
-- Check token matches SSM parameter value
-
-**Response is empty or malformed**
-
-- Check Function URL is correct
-- Verify Lambda is deployed and running
-
-**Watch complication doesn't appear**
-
-- Restart Apple Watch
-- Re-sync shortcuts from iPhone
-
-**Voice dictation is inaccurate**
-
-- Speak clearly and pause between sentences
-- Use the research mode for better processing of unclear text
-
-## Step 6: Customize the Experience
-
-### Add Siri Shortcuts
-
-1. **Record Siri phrase**: "Hey Siri, Wrist Agent"
-2. **Set up variations**:
-   - "Take a note"
-   - "Add reminder"
-   - "Schedule event"
-
-### Batch Processing
-
-Create variants for common patterns:
-
-```javascript
-// Meeting notes shortcut
-{
-  "text": dictatedText,
-  "mode": "note",
-  "maxTokens": 1200,
-  "thinkingTokens": 0
-}
-
-// Quick reminder shortcut
-{
-  "text": dictatedText,
-  "mode": "reminder",
-  "maxTokens": 400,
-  "thinkingTokens": 0
-}
-```
+| Shortcut Name  | Preset Mode | Max Tokens |
+| -------------- | ----------- | ---------- |
+| Quick Note     | note        | 400        |
+| Quick Reminder | reminder    | 400        |
+| Quick Event    | event       | 400        |
+| Research       | research    | 1200       |
+| Deep Analysis  | deepthink   | 2000       |
 
 ### Error Handling
 
-Add error handling for network issues:
+Add error handling to your shortcut:
 
-```javascript
-// In shortcut logic
-try {
-  // API call
-} catch (error) {
-  // Create local note with raw text
-  // Show notification about sync failure
-}
+```mermaid
+flowchart TD
+    API[API Request] --> CHECK{Response OK?}
+    CHECK -->|Yes| PARSE[Parse Response]
+    CHECK -->|No| ERROR[Show Error Alert]
+    ERROR --> SAVE[Save text locally]
+    SAVE --> RETRY[Offer retry option]
 ```
 
-## Example Shortcut JSON
+## Response Format Reference
 
-Here's the complete shortcut configuration for manual setup:
+### Successful Response
 
 ```json
 {
-  "WFWorkflowActions": [
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
-      "WFWorkflowActionParameters": {
-        "WFTextActionText": "Ask for Input",
-        "WFAskActionPrompt": "What would you like to record?",
-        "WFInputType": "Text"
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.choosefrommenu",
-      "WFWorkflowActionParameters": {
-        "WFControlFlowMode": 0,
-        "WFMenuPrompt": "Select mode:",
-        "WFMenuItems": ["Note", "Reminder", "Event", "Research", "Deep Think"]
-      }
-    },
-    {
-      "WFWorkflowActionIdentifier": "is.workflow.actions.downloadurl",
-      "WFWorkflowActionParameters": {
-        "WFHTTPMethod": "POST",
-        "WFURL": "https://YOUR_FUNCTION_URL",
-        "WFHTTPHeaders": {
-          "Content-Type": "application/json",
-          "X-Client-Token": "YOUR_TOKEN"
-        },
-        "WFRequestVariable": {
-          "text": "TEXT_FROM_INPUT",
-          "mode": "SELECTED_MODE",
-          "maxTokens": 800
-        }
-      }
-    }
-  ]
+  "markdown": "# Meeting Notes\n\nDiscussed project timeline...",
+  "action": "note",
+  "title": "Meeting Notes",
+  "dueISO": null,
+  "startISO": null,
+  "endISO": null,
+  "location": null,
+  "url": null,
+  "notes": null,
+  "tags": ["note", "meeting"]
 }
 ```
 
+### Response Fields
+
+| Field      | Type        | Used By                |
+| ---------- | ----------- | ---------------------- |
+| `markdown` | string      | Note content           |
+| `action`   | string      | Determines output type |
+| `title`    | string      | All output types       |
+| `dueISO`   | string/null | Reminders              |
+| `startISO` | string/null | Events                 |
+| `endISO`   | string/null | Events                 |
+| `location` | string/null | Events                 |
+| `url`      | string/null | Events                 |
+| `notes`    | string/null | Events                 |
+| `tags`     | array       | All types              |
+
+## Troubleshooting
+
+### Common Issues
+
+**Shortcut fails with 401/403**
+- Verify X-Client-Token header is set
+- Check token matches SSM parameter
+- Ensure token hasn't been rotated
+
+**Shortcut times out**
+- Check internet connectivity
+- Verify API Gateway URL is correct
+- Try with shorter input text
+
+**Note/Reminder not created**
+- Check response parsing in shortcut
+- Verify "action" field in response
+- Enable shortcut debugging
+
+**Dictation not working**
+- Enable Dictation in Settings
+- Check microphone permissions
+- Try speaking more clearly
+
+### Debug Mode
+
+Add debugging to your shortcut:
+
+1. After API call, add **Quick Look** action
+2. View the raw response
+3. Verify all expected fields are present
+
+## Security Considerations
+
+### Token Storage
+
+- Token is visible in Shortcut configuration
+- Don't share shortcuts containing your token
+- Rotate token if device is compromised
+
+### Device Security
+
+- Use device passcode/Face ID
+- Enable "Erase Data" after failed attempts
+- Keep iOS/watchOS updated
+
 ## Next Steps
 
-Once your shortcut is working:
+- **[Security Configuration](./security)** - Token management
+- **[API Examples](./examples)** - Test different modes
+- **[Troubleshooting](./troubleshooting)** - Common issues
 
-1. **[Review Security Settings](./security)** - Understand token management
-2. **[Explore API Examples](./examples)** - Test advanced features
-3. **[Check Troubleshooting](./troubleshooting)** - Common issues and solutions
-
-Your Apple Watch is now connected to Claude Haiku 4.5! Tap your complication and start capturing ideas with the power of AI.
+Your Apple Watch is now connected to Claude Haiku 4.5! 🎉

@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
 
 // Request payload structure
@@ -56,10 +55,9 @@ type Usage struct {
 
 // Global AWS clients
 var (
-	bedrockClient  *bedrockruntime.Client
-	modelID        string
-	region         string
-	clientToken    string
+	bedrockClient *bedrockruntime.Client
+	modelID       string
+	region        string
 )
 
 func init() {
@@ -74,24 +72,8 @@ func init() {
 	}
 
 	bedrockClient = bedrockruntime.NewFromConfig(cfg)
-	clientToken = strings.TrimSpace(getEnv("CLIENT_TOKEN", ""))
-	if clientToken == "" {
-		paramName := strings.TrimSpace(getEnv("CLIENT_TOKEN_PARAM_NAME", ""))
-		if paramName != "" {
-			token, err := fetchClientTokenFromSSM(cfg, paramName)
-			if err != nil {
-				log.Fatalf("Failed to load client token from SSM: %v", err)
-			}
-			clientToken = token
-		}
-	}
 
 	log.Printf("Initialized Wrist Agent Lambda - Region: %s, Model: %s", region, modelID)
-	if clientToken == "" {
-		log.Printf("Client token auth disabled (no CLIENT_TOKEN or CLIENT_TOKEN_PARAM_NAME set)")
-	} else {
-		log.Printf("Client token auth enabled")
-	}
 }
 
 // initializeAWSConfig sets up AWS configuration
@@ -107,54 +89,39 @@ func initializeAWSConfig() (aws.Config, error) {
 	return cfg, nil
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	log.Printf("Processing request: %s %s", event.HTTPMethod, event.Path)
 
-func handler(ctx context.Context, event events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
-	log.Printf("Processing request: %s %s", event.RequestContext.HTTP.Method, event.RawPath)
-
-	// Handle CORS preflight
-	if event.RequestContext.HTTP.Method == "OPTIONS" {
-		return corsResponse(200, nil), nil
-	}
-
-	// Only allow POST requests
-	if event.RequestContext.HTTP.Method != "POST" {
-		return corsResponse(405, map[string]string{"error": "Method not allowed"}), nil
+	// Only allow POST requests (OPTIONS handled by API Gateway CORS)
+	if event.HTTPMethod != "POST" {
+		return apiResponse(405, map[string]string{"error": "Method not allowed"}), nil
 	}
 
 	// Parse request body
 	var req Req
 	if err := json.Unmarshal([]byte(event.Body), &req); err != nil {
 		log.Printf("Failed to parse request body: %v", err)
-		return corsResponse(400, map[string]string{"error": "Invalid JSON payload"}), nil
+		return apiResponse(400, map[string]string{"error": "Invalid JSON payload"}), nil
 	}
 
 	// Validate request
 	if err := validateRequest(&req); err != nil {
 		log.Printf("Request validation failed: %v", err)
-		return corsResponse(400, map[string]string{"error": err.Error()}), nil
+		return apiResponse(400, map[string]string{"error": err.Error()}), nil
 	}
 
-	if err := validateAuthHeader(event.Headers); err != nil {
-		log.Printf("Auth validation failed: %v", err)
-		return corsResponse(401, map[string]string{"error": "Unauthorized"}), nil
-	}
+	// Authentication is handled by API Gateway Lambda Authorizer
+	// No need to validate token here
 
 	// Call Bedrock
 	response, err := callBedrock(ctx, &req)
 	if err != nil {
 		log.Printf("Bedrock call failed: %v", err)
-		return corsResponse(500, map[string]string{"error": "Failed to process request"}), nil
+		return apiResponse(500, map[string]string{"error": "Failed to process request"}), nil
 	}
 
 	log.Printf("Successfully processed request for mode: %s", req.Mode)
-	return corsResponse(200, response), nil
+	return apiResponse(200, response), nil
 }
 
 func validateRequest(req *Req) error {
@@ -336,36 +303,24 @@ func extractTitle(content string, mode string) string {
 	return fmt.Sprintf("Wrist Agent %s", strings.Title(mode))
 }
 
-func corsResponse(statusCode int, body interface{}) events.LambdaFunctionURLResponse {
+// apiResponse creates an API Gateway proxy response with CORS headers
+func apiResponse(statusCode int, body interface{}) events.APIGatewayProxyResponse {
 	var bodyStr string
 	if body != nil {
 		bodyBytes, _ := json.Marshal(body)
 		bodyStr = string(bodyBytes)
 	}
 
-	return events.LambdaFunctionURLResponse{
+	return events.APIGatewayProxyResponse{
 		StatusCode: statusCode,
 		Headers: map[string]string{
 			"Content-Type":                 "application/json",
 			"Access-Control-Allow-Origin":  "*",
 			"Access-Control-Allow-Headers": "Content-Type, X-Client-Token",
 			"Access-Control-Allow-Methods": "POST, OPTIONS",
-			"Access-Control-Max-Age":       "3600",
 		},
 		Body: bodyStr,
 	}
-}
-
-func validateAuthHeader(headers map[string]string) error {
-	if clientToken == "" {
-		return nil
-	}
-	for key, value := range headers {
-		if strings.EqualFold(key, "X-Client-Token") && strings.TrimSpace(value) == clientToken {
-			return nil
-		}
-	}
-	return fmt.Errorf("missing or invalid X-Client-Token")
 }
 
 func getEnv(key, defaultValue string) string {
@@ -373,18 +328,6 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
-}
-
-func fetchClientTokenFromSSM(cfg aws.Config, paramName string) (string, error) {
-	ssmClient := ssm.NewFromConfig(cfg)
-	output, err := ssmClient.GetParameter(context.TODO(), &ssm.GetParameterInput{
-		Name:           aws.String(paramName),
-		WithDecryption: aws.Bool(true),
-	})
-	if err != nil {
-		return "", fmt.Errorf("get parameter %s: %w", paramName, err)
-	}
-	return strings.TrimSpace(aws.ToString(output.Parameter.Value)), nil
 }
 
 func main() {

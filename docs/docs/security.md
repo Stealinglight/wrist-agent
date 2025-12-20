@@ -8,385 +8,379 @@ This guide covers the security model, best practices, and configuration for your
 
 ## Security Architecture
 
-Wrist Agent implements a multi-layered security approach:
-
 ```mermaid
-graph TD
-    A[Apple Watch] --> B[HTTPS Transport]
-    B --> C[Function URL]
-    C --> D[Header Authentication]
-    D --> E[Lambda Execution]
-    E --> F[IAM Role]
-    F --> G[Bedrock Access]
-    F --> H[SSM Parameter]
+flowchart TB
+    subgraph Client["📱 Client"]
+        WATCH[Apple Watch]
+        SHORT[Shortcut]
+    end
+    
+    subgraph Edge["🔒 API Gateway"]
+        APIGW[REST API]
+        CORS[CORS Policy]
+        THROTTLE[Rate Limiting]
+    end
+    
+    subgraph Auth["🛡️ Authorization"]
+        AUTHORIZER[Lambda Authorizer]
+        POLICY[IAM Policy]
+    end
+    
+    subgraph Secrets["🔐 Secrets"]
+        SSM[(SSM Parameter)]
+    end
+    
+    subgraph Backend["⚡ Backend"]
+        HANDLER[Handler Lambda]
+        BEDROCK[Amazon Bedrock]
+    end
+    
+    WATCH --> SHORT
+    SHORT -->|HTTPS + Token| APIGW
+    APIGW --> CORS
+    CORS --> THROTTLE
+    THROTTLE --> AUTHORIZER
+    AUTHORIZER -->|Validate| SSM
+    AUTHORIZER -->|Allow/Deny| POLICY
+    POLICY -->|Invoke| HANDLER
+    HANDLER --> BEDROCK
 ```
 
-## Authentication Model
+## Authentication Flow
 
-### Header-Based Authentication
+```mermaid
+sequenceDiagram
+    participant Client as Apple Shortcut
+    participant API as API Gateway
+    participant Auth as Lambda Authorizer
+    participant SSM as SSM Parameter
+    participant Handler as Handler Lambda
+    
+    Client->>API: POST /invoke + X-Client-Token
+    API->>Auth: Authorize Request
+    Auth->>SSM: Get Expected Token
+    SSM-->>Auth: Token Value
+    
+    alt Token Valid
+        Auth-->>API: Allow (IAM Policy)
+        API->>Handler: Invoke Function
+        Handler-->>API: Response
+        API-->>Client: 200 OK + JSON
+    else Token Invalid
+        Auth-->>API: Deny (IAM Policy)
+        API-->>Client: 403 Forbidden
+    end
+```
 
-Wrist Agent uses a simple but effective authentication scheme:
+## Security Layers
 
-- **Authentication Header**: `X-Client-Token`
-- **Token Storage**: AWS SSM Parameter Store
-- **Token Type**: Base64-encoded random string (256-bit entropy)
-- **Token Scope**: Single shared token for all requests
+### Layer 1: Transport Security
 
-**Advantages:**
+All communication uses HTTPS with TLS 1.2+:
 
-- Simple to implement and manage
-- No complex OAuth or JWT flows
-- Suitable for personal/single-user deployments
-- Easy token rotation
+| Component   | Protocol | Certificate |
+| ----------- | -------- | ----------- |
+| API Gateway | HTTPS    | AWS Managed |
+| Lambda      | Internal | N/A         |
+| SSM         | Internal | N/A         |
+| Bedrock     | Internal | N/A         |
 
-**Considerations:**
+### Layer 2: API Gateway Protection
 
-- Single token shared across all clients
-- Token visible in Apple Shortcuts configuration
-- Suitable for personal use, not multi-tenant systems
+```mermaid
+flowchart LR
+    subgraph Protection["API Gateway Security"]
+        CORS[CORS Policy]
+        THROTTLE[Throttling]
+        LOGGING[Access Logging]
+    end
+    
+    REQ[Request] --> CORS
+    CORS --> THROTTLE
+    THROTTLE --> LOGGING
+    LOGGING --> AUTH[Authorizer]
+```
+
+**Built-in protections:**
+
+- **CORS Policy**: Restricts allowed headers and methods
+- **Throttling**: 10 requests/second, 20 burst
+- **Access Logging**: All requests logged to CloudWatch
+- **Regional Endpoint**: Reduces attack surface
+
+### Layer 3: Lambda Authorizer
+
+The Lambda Authorizer validates every request before it reaches the handler:
+
+```go
+// Token validation with caching
+func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) {
+    token := extractToken(event)           // Get X-Client-Token header
+    expectedToken := getExpectedToken(ctx) // From SSM (cached 5 min)
+    
+    if token == expectedToken {
+        return generatePolicy("Allow", event.MethodArn)
+    }
+    return generatePolicy("Deny", event.MethodArn)
+}
+```
+
+**Security features:**
+
+- Token cached for 5 minutes (reduces SSM calls)
+- Case-insensitive header matching
+- Returns IAM policy (not just boolean)
+- Authorization result cached by API Gateway
+
+### Layer 4: IAM Permissions
+
+Each component has least-privilege permissions:
+
+```mermaid
+flowchart TB
+    subgraph Authorizer["Authorizer Permissions"]
+        A1[ssm:GetParameter]
+        A2[logs:CreateLogStream]
+        A3[logs:PutLogEvents]
+    end
+    
+    subgraph Handler["Handler Permissions"]
+        H1[bedrock:InvokeModel]
+        H2[logs:CreateLogStream]
+        H3[logs:PutLogEvents]
+    end
+    
+    SSM[(SSM Parameter)] --> A1
+    CW1[(CloudWatch)] --> A2
+    CW1 --> A3
+    BR[Bedrock] --> H1
+    CW2[(CloudWatch)] --> H2
+    CW2 --> H3
+```
 
 ## Token Management
 
-### Initial Token Generation
+### Token Properties
 
-The CDK deployment creates a random initial token (or uses `CLIENT_TOKEN` if you set it):
+| Property   | Value                 |
+| ---------- | --------------------- |
+| Type       | Base64-encoded string |
+| Length     | 32 bytes (256 bits)   |
+| Storage    | SSM Parameter Store   |
+| Encryption | AWS managed           |
+| Cache TTL  | 5 minutes             |
 
-```typescript
-// In CDK app
-const clientTokenValue = process.env.CLIENT_TOKEN || crypto.randomBytes(32).toString('base64');
-```
-
-```typescript
-// In CDK stack
-const tokenParam = new ssm.StringParameter(this, 'ClientToken', {
-  parameterName: config.clientTokenParamName,
-  stringValue: config.clientTokenValue,
-  tier: ssm.ParameterTier.STANDARD,
-});
-```
-
-### Secure Token Rotation
-
-Regular token rotation is a security best practice:
+### Generate a Secure Token
 
 ```bash
-# Generate a cryptographically secure token
-NEW_TOKEN=$(openssl rand -base64 32)
+# Generate cryptographically secure token
+TOKEN=$(openssl rand -base64 32)
 
-# Update the SSM parameter
+# Update SSM parameter
 aws ssm put-parameter \
   --name "/wrist-agent/client-token" \
-  --value "$NEW_TOKEN" \
+  --value "$TOKEN" \
   --type "String" \
   --overwrite
 
-# Update your Apple Shortcut with the new token
-echo "New token: $NEW_TOKEN"
+# Display token (copy to Shortcut)
+echo "New Token: $TOKEN"
 ```
 
-### Automated Rotation (Optional)
+### Token Rotation
 
-Create a Lambda function for automated token rotation:
-
-```go
-func rotateToken(ctx context.Context) error {
-    // Generate new token
-    newToken := generateSecureToken(32)
-
-    // Update SSM parameter
-    _, err := ssmClient.PutParameter(ctx, &ssm.PutParameterInput{
-        Name:      aws.String("/wrist-agent/client-token"),
-        Value:     aws.String(newToken),
-        Type:      types.ParameterTypeString,
-        Overwrite: aws.Bool(true),
-    })
-
-    // Notify about token change (SNS, email, etc.)
-    notifyTokenRotation(newToken)
-
-    return err
-}
+```mermaid
+sequenceDiagram
+    participant Admin
+    participant SSM as SSM Parameter
+    participant Cache as Authorizer Cache
+    participant Shortcut as Apple Shortcut
+    
+    Admin->>Admin: Generate new token
+    Admin->>SSM: Update parameter
+    Note over Cache: Cache expires in ≤5 min
+    Admin->>Shortcut: Update X-Client-Token
+    Note over Shortcut: New token active
 ```
 
-## Transport Security
+**Rotation process:**
 
-### HTTPS Enforcement
+1. Generate new token: `openssl rand -base64 32`
+2. Update SSM parameter
+3. Wait up to 5 minutes for cache expiry
+4. Update Apple Shortcut with new token
 
-All communication uses HTTPS:
+### Recommended Rotation Schedule
 
-- **Lambda Function URLs**: Native HTTPS endpoints
-- **Certificate Management**: Handled by AWS
-- **TLS Version**: TLS 1.2+ enforced
+| Environment      | Frequency     |
+| ---------------- | ------------- |
+| Personal         | Every 90 days |
+| Shared           | Every 30 days |
+| After compromise | Immediately   |
 
-### CORS Configuration
+## Rate Limiting
 
-The Lambda Function URL is configured with restrictive CORS:
+API Gateway provides built-in throttling:
 
-```typescript
-cors: {
-  allowCredentials: false,
-  allowedHeaders: ['Content-Type', 'X-Client-Token'],
-  allowedMethods: [lambda.HttpMethod.POST, lambda.HttpMethod.OPTIONS],
-  allowedOrigins: ['*'],
-  maxAge: cdk.Duration.hours(1),
-}
+```mermaid
+flowchart LR
+    subgraph Limits["Rate Limits"]
+        RATE[10 req/sec steady]
+        BURST[20 req burst]
+    end
+    
+    REQ[Requests] --> RATE
+    RATE --> BURST
+    BURST --> |Under Limit| OK[✅ Process]
+    BURST --> |Over Limit| REJECT[❌ 429 Error]
 ```
 
-**Security Notes:**
-
-- `allowCredentials: false` prevents credential-based attacks
-- Limited headers reduce attack surface
-- Only POST and OPTIONS methods allowed
-- `allowedOrigins: ['*']` required for Apple Shortcuts
-
-## AWS Authentication Options
-
-Wrist Agent supports two authentication methods for Bedrock access:
-
-### Option 1: IAM Role Authentication (Default)
-
-The Lambda function uses least-privilege IAM permissions:
-
-```typescript
-// Bedrock model access only
-this.fn.addToRolePolicy(
-  new iam.PolicyStatement({
-    effect: iam.Effect.ALLOW,
-    actions: ['bedrock:InvokeModel'],
-    resources: [`arn:aws:bedrock:${region}::foundation-model/${modelId}`],
-  })
-);
-
-// SSM parameter read access only
-this.tokenParam.grantRead(this.fn);
-```
-
-**Advantages:**
-
-- No long-lived credentials to manage
-- Follows AWS security best practices
-- Automatic credential rotation via IAM
-
-**Requirements:**
-
-- Lambda execution role must have Bedrock permissions
-- Works within AWS environment automatically
-
-### Bedrock Authentication
-
-Wrist Agent uses IAM role credentials only. There is no Bedrock API key or static credential stored in the repo or Lambda environment.
-
-**Security Features:**
-
-- **No long-lived secrets**: Uses the Lambda execution role
-- **Least privilege**: Grants only `bedrock:InvokeModel` for the configured model
-- **Auditability**: All Bedrock calls are logged in CloudTrail
-
-**Deployment Process:**
-
-1. **Deploy**: Run `npx cdk deploy` with an IAM role that has Bedrock access
-2. **Runtime**: Lambda uses its execution role; no API keys are stored or loaded
-
-### Resource-Level Permissions
-
-Permissions are scoped to specific resources:
-
-- **Bedrock**: Only the specified Claude model
-- **SSM**: Only the specific token parameter
-- **CloudWatch**: Automatic logging permissions
-
-### Deployment Security
-
-The deployment uses OIDC for GitHub Actions:
-
-- **No AWS keys in repository**
-- **Temporary credentials only**
-- **Scoped to specific repository**
-
-## Data Security
-
-### Data in Transit
-
-- **Encryption**: TLS 1.2+ for all communications
-- **Integrity**: HTTPS ensures data integrity
-- **No sensitive data in URLs**: All data in request body
-
-### Data at Rest
-
-- **SSM Parameter**: Encrypted at rest by default
-- **CloudWatch Logs**: Encrypted with AWS managed keys
-- **No persistent storage**: Lambda is stateless
-
-### Data Processing
-
-- **Voice Data**: Processed by Apple, not stored
-- **Request Text**: Sent to Bedrock, not permanently stored
-- **Responses**: Not logged or stored beyond CloudWatch retention
+| Setting     | Value     | Purpose                 |
+| ----------- | --------- | ----------------------- |
+| Rate Limit  | 10/second | Steady state throughput |
+| Burst Limit | 20        | Handle traffic spikes   |
+| Cache TTL   | 5 minutes | Authorization caching   |
 
 ## Monitoring and Alerting
 
-### CloudWatch Monitoring
+### CloudWatch Metrics
 
-Monitor authentication failures and usage patterns:
+Monitor these metrics for security events:
+
+| Metric   | Threshold  | Alert             |
+| -------- | ---------- | ----------------- |
+| 4XXError | > 10/min   | Possible attack   |
+| 5XXError | > 5/min    | System issue      |
+| Count    | > 100/hour | Unusual usage     |
+| Latency  | > 5000ms   | Performance issue |
+
+### Set Up Alerts
 
 ```bash
-# Create alarm for 401 errors
+# Alert on authentication failures
 aws cloudwatch put-metric-alarm \
   --alarm-name "WristAgent-AuthFailures" \
-  --alarm-description "Alert on authentication failures" \
   --metric-name "4XXError" \
-  --namespace "AWS/Lambda" \
+  --namespace "AWS/ApiGateway" \
   --statistic "Sum" \
   --period 300 \
-  --threshold 5 \
+  --threshold 10 \
   --comparison-operator "GreaterThanThreshold" \
-  --evaluation-periods 2
+  --evaluation-periods 2 \
+  --alarm-actions "arn:aws:sns:us-west-2:ACCOUNT:alerts"
 ```
 
-### Usage Monitoring
-
-Track API usage for anomaly detection:
+### View Logs
 
 ```bash
-# Monitor invocation count
-aws cloudwatch put-metric-alarm \
-  --alarm-name "WristAgent-HighUsage" \
-  --alarm-description "Alert on unusual usage patterns" \
-  --metric-name "Invocations" \
-  --namespace "AWS/Lambda" \
-  --statistic "Sum" \
-  --period 3600 \
-  --threshold 100 \
-  --comparison-operator "GreaterThanThreshold" \
-  --evaluation-periods 1
+# View API Gateway access logs
+aws logs filter-log-events \
+  --log-group-name "/aws/api-gateway/WristAgentApi" \
+  --start-time $(date -d '1 hour ago' +%s)000
+
+# View Authorizer logs
+aws logs filter-log-events \
+  --log-group-name "/aws/lambda/WristAgentStack-WristAgentAuthorizer" \
+  --filter-pattern "Authorization denied"
 ```
-
-## Security Best Practices
-
-### Deployment Security
-
-1. **Regular Updates**: Keep CDK and dependencies updated
-2. **Token Rotation**: Rotate tokens monthly or after any compromise
-3. **Access Review**: Regularly review IAM permissions
-4. **Monitoring**: Set up alerts for unusual activity
-
-### Apple Shortcut Security
-
-1. **Token Storage**: Tokens are visible in Shortcuts; consider device security
-2. **Sharing**: Don't share shortcuts containing tokens
-3. **Backup**: Secure backup of shortcuts with credentials
-4. **Updates**: Update shortcuts after token rotation
-
-### Operational Security
-
-1. **Least Privilege**: Use minimal AWS permissions for deployment
-2. **Separation**: Use separate AWS accounts for dev/prod if needed
-3. **Audit Logging**: Enable CloudTrail for API audit logs
-4. **Cost Monitoring**: Set up billing alerts to detect abuse
 
 ## Incident Response
 
 ### Compromised Token
 
-If you suspect token compromise:
-
-```bash
-# 1. Immediately rotate the token
-NEW_TOKEN=$(openssl rand -base64 32)
-aws ssm put-parameter \
-  --name "/wrist-agent/client-token" \
-  --value "$NEW_TOKEN" \
-  --type "String" \
-  --overwrite
-
-# 2. Update Apple Shortcuts immediately
-
-# 3. Check CloudWatch logs for suspicious activity
-aws logs filter-log-events \
-  --log-group-name "/aws/lambda/WristAgentStack-WristAgentHandler" \
-  --start-time $(date -d '1 hour ago' +%s)000
+```mermaid
+flowchart TD
+    DETECT[🚨 Detect Compromise] --> ROTATE[1. Rotate Token]
+    ROTATE --> UPDATE[2. Update Shortcut]
+    UPDATE --> REVIEW[3. Review Logs]
+    REVIEW --> ASSESS[4. Assess Impact]
+    ASSESS --> REPORT[5. Document Incident]
 ```
 
-### Unusual Activity
+**Steps:**
+
+1. **Rotate immediately:**
+   ```bash
+   aws ssm put-parameter \
+     --name "/wrist-agent/client-token" \
+     --value "$(openssl rand -base64 32)" \
+     --overwrite
+   ```
+
+2. **Update Apple Shortcut** with new token
+
+3. **Review CloudWatch logs** for unauthorized access
+
+4. **Assess impact** - check for unusual Bedrock usage
+
+5. **Document** the incident and response
+
+### Unusual Activity Detection
 
 Signs to monitor:
 
-- **High request volume** from unknown sources
-- **Failed authentication attempts** in CloudWatch
-- **Unexpected AWS costs** from Bedrock usage
-- **Error patterns** indicating attack attempts
+- High volume of 403 responses (token guessing)
+- Requests from unexpected IP ranges
+- Unusual request patterns (automated probing)
+- Spike in Bedrock costs
 
-## Compliance Considerations
+## Security Best Practices
 
-### Data Privacy
+### Do's ✅
 
-- **Personal Data**: Voice transcriptions processed by Apple and Bedrock
-- **Retention**: No long-term storage of user data
-- **Processing Location**: AWS region configurable (default: us-west-2)
+- Rotate tokens regularly (every 90 days)
+- Monitor CloudWatch logs and metrics
+- Keep CDK and dependencies updated
+- Use unique tokens per device (if multiple)
+- Enable CloudTrail for audit logging
 
-### Regional Compliance
+### Don'ts ❌
 
-For specific compliance requirements:
+- Share tokens via insecure channels
+- Commit tokens to version control
+- Disable the Lambda Authorizer
+- Share Shortcuts with embedded tokens
+- Ignore 4XX error spikes
+
+## Compliance Notes
+
+### Data Handling
+
+| Data Type   | Storage    | Retention     |
+| ----------- | ---------- | ------------- |
+| Voice Text  | Not stored | Transient     |
+| API Logs    | CloudWatch | 7 days        |
+| Auth Tokens | SSM        | Until rotated |
+| Bedrock I/O | Not stored | Transient     |
+
+### Regional Deployment
+
+Deploy to specific regions for compliance:
 
 ```bash
-# Deploy to EU region for GDPR
+# EU deployment
 export AWS_REGION=eu-west-1
-export BEDROCK_MODEL_ID=anthropic.claude-haiku-4-5-20251001-v1:0
+cd cdk && npx cdk deploy
 
-cd cdk
-npx cdk deploy
+# US deployment  
+export AWS_REGION=us-west-2
+cd cdk && npx cdk deploy
 ```
 
 ## Security Checklist
 
 Before going live:
 
-- [ ] **Token rotated** from default value
-- [ ] **Monitoring set up** for failures and usage
-- [ ] **Access reviewed** - minimal IAM permissions
-- [ ] **Apple Shortcuts secured** on trusted devices only
-- [ ] **Backup plan** for token recovery
-- [ ] **Cost alerts configured** to prevent abuse
-- [ ] **CloudTrail enabled** for audit logging
-- [ ] **Regular rotation scheduled** for tokens
-
-## Advanced Security Options
-
-### IP Restrictions (Future Enhancement)
-
-For additional security, consider Lambda@Edge for IP filtering:
-
-```typescript
-// Example: Restrict to specific IP ranges
-const allowedIPs = ['192.168.1.0/24', '10.0.0.0/8'];
-```
-
-### Request Signing (Future Enhancement)
-
-For higher security environments, implement request signing:
-
-```typescript
-// Example: HMAC-SHA256 request signing
-const signature = crypto.createHmac('sha256', secret).update(requestBody).digest('hex');
-```
-
-### Multi-Token Support (Future Enhancement)
-
-Support multiple tokens for different devices:
-
-```json
-{
-  "tokens": {
-    "device1": "token1",
-    "device2": "token2"
-  }
-}
-```
+- [ ] Token rotated from default value
+- [ ] CloudWatch alarms configured
+- [ ] Access logs enabled
+- [ ] Throttling configured appropriately
+- [ ] Apple Shortcut on trusted devices only
+- [ ] Backup plan for token recovery
+- [ ] Regular rotation schedule documented
 
 ## Next Steps
 
 - **[Test Your Setup](./examples)** - Verify security configuration
-- **[Monitor Usage](./troubleshooting)** - Set up monitoring
-- **[Plan Maintenance](./deployment)** - Regular security updates
-
-Your Wrist Agent deployment is now secured with industry best practices. Remember to rotate tokens regularly and monitor for unusual activity.
+- **[Troubleshooting](./troubleshooting)** - Common security issues
+- **[Apple Shortcut](./apple-shortcut)** - Secure client configuration
