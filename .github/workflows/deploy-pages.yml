@@ -49,12 +49,13 @@ jobs:
       # Check for broken links in built site
       - name: Check for broken links
         run: |
-          # Install htmltest for static HTML link checking
+          # Install htmltest with checksum verification
           wget -q https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz
+          echo "775c597ee74899d6002cd2d93076f897f4ba68686bceabe2e5d72e84c57bc0fb  htmltest_0.17.0_linux_amd64.tar.gz" | sha256sum -c - || exit 1
           tar xzf htmltest_0.17.0_linux_amd64.tar.gz
           
-          # Check for broken links in built static files
-          ./htmltest
+          # Run htmltest and fail workflow if broken links are found
+          ./htmltest || { echo "Error: Broken links detected in documentation"; exit 1; }
         working-directory: docs
 
   deploy:
