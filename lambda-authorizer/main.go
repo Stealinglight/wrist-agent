@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +16,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 )
+
+// Authorization error types for debugging (returned in policy context)
+// These help identify the reason for authorization failures without leaking sensitive data
+const (
+	ErrMissingToken  = "missing_token"
+	ErrInvalidToken  = "invalid_token"
+	ErrTokenMismatch = "token_mismatch"
+	ErrSSMFailure    = "ssm_failure"
+)
+
+// Default cache duration in seconds (can be overridden by TOKEN_CACHE_TTL_SECONDS env var)
+const defaultCacheDurationSeconds = 300 // 5 minutes
 
 // TokenCache holds cached token with expiration
 type TokenCache struct {
@@ -28,12 +41,24 @@ var (
 	tokenParamName string
 	region         string
 	tokenCache     = &TokenCache{}
-	cacheDuration  = 5 * time.Minute
+	cacheDuration  time.Duration
 )
+
+// getCacheDuration reads cache TTL from environment or returns default
+func getCacheDuration() time.Duration {
+	if env := os.Getenv("TOKEN_CACHE_TTL_SECONDS"); env != "" {
+		if seconds, err := strconv.Atoi(env); err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
+		log.Printf("Invalid TOKEN_CACHE_TTL_SECONDS value: %s, using default", env)
+	}
+	return time.Duration(defaultCacheDurationSeconds) * time.Second
+}
 
 func init() {
 	region = getEnv("AWS_REGION", "us-west-2")
 	tokenParamName = strings.TrimSpace(getEnv("CLIENT_TOKEN_PARAM_NAME", "/wrist-agent/client-token"))
+	cacheDuration = getCacheDuration()
 
 	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region))
 	if err != nil {
@@ -41,7 +66,7 @@ func init() {
 	}
 
 	ssmClient = ssm.NewFromConfig(cfg)
-	log.Printf("Lambda Authorizer initialized - Region: %s, TokenParam: %s", region, tokenParamName)
+	log.Printf("Lambda Authorizer initialized - Region: %s, TokenParam: %s, CacheTTL: %v", region, tokenParamName, cacheDuration)
 }
 
 func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequestTypeRequest) (events.APIGatewayCustomAuthorizerResponse, error) {
@@ -51,20 +76,27 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 	token := extractToken(event)
 	if token == "" {
 		log.Printf("Authorization denied: missing token")
-		return generatePolicy("user", "Deny", event.MethodArn, nil), nil
+		return generatePolicy("user", "Deny", event.MethodArn, map[string]interface{}{
+			"errorType": ErrMissingToken,
+		}), nil
 	}
 
 	// Get expected token from SSM (with caching)
 	expectedToken, err := getExpectedToken(ctx)
 	if err != nil {
 		log.Printf("Authorization error: failed to retrieve expected token: %v", err)
-		return generatePolicy("user", "Deny", event.MethodArn, nil), nil
+		return generatePolicy("user", "Deny", event.MethodArn, map[string]interface{}{
+			"errorType": ErrSSMFailure,
+		}), nil
 	}
 
 	// Validate token
+	// SECURITY: Never log actual token values - only metadata about the validation result
 	if token != expectedToken {
-		log.Printf("Authorization denied: invalid token")
-		return generatePolicy("user", "Deny", event.MethodArn, nil), nil
+		log.Printf("Authorization denied: token mismatch")
+		return generatePolicy("user", "Deny", event.MethodArn, map[string]interface{}{
+			"errorType": ErrTokenMismatch,
+		}), nil
 	}
 
 	log.Printf("Authorization granted")
@@ -118,6 +150,7 @@ func getExpectedToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to get SSM parameter %s: %w", tokenParamName, err)
 	}
 
+	// SECURITY: Never log token values - only log metadata about the cache operation
 	token := strings.TrimSpace(aws.ToString(output.Parameter.Value))
 	tokenCache.token = token
 	tokenCache.expiration = time.Now().Add(cacheDuration)

@@ -184,6 +184,57 @@ func TestGetEnv_Default(t *testing.T) {
 	}
 }
 
+func TestGetCacheDuration_Default(t *testing.T) {
+	// Ensure env var is not set
+	t.Setenv("TOKEN_CACHE_TTL_SECONDS", "")
+
+	duration := getCacheDuration()
+	expected := time.Duration(defaultCacheDurationSeconds) * time.Second
+
+	if duration != expected {
+		t.Errorf("Expected %v, got %v", expected, duration)
+	}
+}
+
+func TestGetCacheDuration_CustomValue(t *testing.T) {
+	t.Setenv("TOKEN_CACHE_TTL_SECONDS", "60")
+
+	duration := getCacheDuration()
+	expected := 60 * time.Second
+
+	if duration != expected {
+		t.Errorf("Expected %v, got %v", expected, duration)
+	}
+}
+
+func TestGetCacheDuration_InvalidValue(t *testing.T) {
+	t.Setenv("TOKEN_CACHE_TTL_SECONDS", "invalid")
+
+	duration := getCacheDuration()
+	expected := time.Duration(defaultCacheDurationSeconds) * time.Second
+
+	if duration != expected {
+		t.Errorf("Expected default %v for invalid value, got %v", expected, duration)
+	}
+}
+
+func TestGeneratePolicy_WithErrorContext(t *testing.T) {
+	resource := "arn:aws:execute-api:us-west-2:123456789:api-id/stage/POST/invoke"
+	ctx := map[string]interface{}{
+		"errorType": ErrMissingToken,
+	}
+
+	policy := generatePolicy("user", "Deny", resource, ctx)
+
+	if policy.Context == nil {
+		t.Fatal("Expected context to be set")
+	}
+
+	if policy.Context["errorType"] != ErrMissingToken {
+		t.Errorf("Expected errorType '%s', got '%v'", ErrMissingToken, policy.Context["errorType"])
+	}
+}
+
 // Integration test (requires AWS credentials)
 func TestHandler_Integration(t *testing.T) {
 	if testing.Short() {

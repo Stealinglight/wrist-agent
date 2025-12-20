@@ -123,16 +123,24 @@ func TestApiResponse(t *testing.T) {
 		t.Errorf("Expected status code 200, got %d", resp.StatusCode)
 	}
 
-	expectedHeaders := []string{
-		"Content-Type",
+	// Only Content-Type header is set by Lambda
+	// CORS headers are handled by API Gateway's defaultCorsPreflightOptions
+	if _, exists := resp.Headers["Content-Type"]; !exists {
+		t.Errorf("Expected header Content-Type to exist")
+	}
+	if resp.Headers["Content-Type"] != "application/json" {
+		t.Errorf("Expected Content-Type 'application/json', got '%s'", resp.Headers["Content-Type"])
+	}
+
+	// Verify CORS headers are NOT set (handled by API Gateway)
+	corsHeaders := []string{
 		"Access-Control-Allow-Origin",
 		"Access-Control-Allow-Headers",
 		"Access-Control-Allow-Methods",
 	}
-
-	for _, header := range expectedHeaders {
-		if _, exists := resp.Headers[header]; !exists {
-			t.Errorf("Expected header %s to exist", header)
+	for _, header := range corsHeaders {
+		if _, exists := resp.Headers[header]; exists {
+			t.Errorf("CORS header %s should not be set by Lambda (handled by API Gateway)", header)
 		}
 	}
 

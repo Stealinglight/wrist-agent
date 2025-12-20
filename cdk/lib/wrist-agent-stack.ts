@@ -3,9 +3,15 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { GoFunction } from '@aws-cdk/aws-lambda-go-alpha';
 import * as bedrock from '@aws-cdk/aws-bedrock-alpha';
 import { Construct } from 'constructs';
+
+// Configuration constants
+const THROTTLE_RATE_LIMIT = 10;
+const THROTTLE_BURST_LIMIT = 20;
+const TOKEN_CACHE_TTL_SECONDS = 300; // 5 minutes
 
 export interface StackConfig {
   region: string;
@@ -38,10 +44,15 @@ export class WristAgentStack extends cdk.Stack {
     });
 
     // Create SSM parameter for client token
+    // NOTE: CDK creates this as a StringParameter (unencrypted) because SecureString
+    // values cannot be created via CloudFormation (the value would be exposed in templates).
+    // After deployment, users SHOULD convert this to SecureString using:
+    //   aws ssm put-parameter --name "/wrist-agent/client-token" --value "YOUR_TOKEN" --type SecureString --overwrite
+    // The authorizer uses WithDecryption: true and works with both String and SecureString.
     const tokenParam = new ssm.StringParameter(this, 'ClientToken', {
       parameterName: config.clientTokenParamName,
       stringValue: config.clientTokenValue,
-      description: 'Shared client token for Wrist Agent requests',
+      description: 'Shared client token for Wrist Agent requests. Convert to SecureString after deployment for production use.',
       tier: ssm.ParameterTier.STANDARD,
     });
 
@@ -54,12 +65,25 @@ export class WristAgentStack extends cdk.Stack {
       memorySize: 128,
       environment: {
         CLIENT_TOKEN_PARAM_NAME: config.clientTokenParamName,
+        TOKEN_CACHE_TTL_SECONDS: String(TOKEN_CACHE_TTL_SECONDS),
       },
       description: 'Wrist Agent API Gateway Lambda Authorizer',
     });
 
-    // Grant authorizer function access to SSM parameter
+    // Grant authorizer function access to SSM parameter (both String and SecureString)
     tokenParam.grantRead(this.authorizerFn);
+
+    // Grant KMS decrypt permission for SecureString parameters (uses default SSM key)
+    this.authorizerFn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['kms:Decrypt'],
+      resources: ['*'], // Default SSM key - can be restricted to specific key ARN if known
+      conditions: {
+        StringEquals: {
+          'kms:ViaService': `ssm.${config.region}.amazonaws.com`,
+        },
+      },
+    }));
 
     // Create main handler Lambda function
     this.fn = new GoFunction(this, 'WristAgentHandler', {
@@ -103,9 +127,13 @@ export class WristAgentStack extends cdk.Stack {
         }),
         loggingLevel: apigateway.MethodLoggingLevel.INFO,
         dataTraceEnabled: false,
-        throttlingRateLimit: 10,
-        throttlingBurstLimit: 20,
+        throttlingRateLimit: THROTTLE_RATE_LIMIT,
+        throttlingBurstLimit: THROTTLE_BURST_LIMIT,
       },
+      // CORS Configuration: Using wildcard origins because:
+      // 1. Apple Shortcuts don't use traditional browser-based CORS
+      // 2. Primary security is provided by token-based authentication
+      // 3. API Gateway handles CORS preflight - Lambda doesn't need CORS headers
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: ['POST', 'OPTIONS'],
@@ -119,7 +147,7 @@ export class WristAgentStack extends cdk.Stack {
     const authorizer = new apigateway.RequestAuthorizer(this, 'TokenAuthorizer', {
       handler: this.authorizerFn,
       identitySources: [apigateway.IdentitySource.header('X-Client-Token')],
-      resultsCacheTtl: cdk.Duration.minutes(5),
+      resultsCacheTtl: cdk.Duration.seconds(TOKEN_CACHE_TTL_SECONDS),
       authorizerName: 'WristAgentTokenAuthorizer',
     });
 

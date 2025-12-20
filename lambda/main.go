@@ -13,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 // Request payload structure
@@ -300,10 +302,14 @@ func extractTitle(content string, mode string) string {
 			return line
 		}
 	}
-	return fmt.Sprintf("Wrist Agent %s", strings.Title(mode))
+	// Use cases.Title instead of deprecated strings.Title (Go 1.18+)
+	caser := cases.Title(language.English)
+	return fmt.Sprintf("Wrist Agent %s", caser.String(mode))
 }
 
-// apiResponse creates an API Gateway proxy response with CORS headers
+// apiResponse creates an API Gateway proxy response
+// Note: CORS headers are handled by API Gateway's defaultCorsPreflightOptions
+// so we don't need to add them here - only Content-Type is required
 func apiResponse(statusCode int, body interface{}) events.APIGatewayProxyResponse {
 	var bodyStr string
 	if body != nil {
@@ -314,10 +320,7 @@ func apiResponse(statusCode int, body interface{}) events.APIGatewayProxyRespons
 	return events.APIGatewayProxyResponse{
 		StatusCode: statusCode,
 		Headers: map[string]string{
-			"Content-Type":                 "application/json",
-			"Access-Control-Allow-Origin":  "*",
-			"Access-Control-Allow-Headers": "Content-Type, X-Client-Token",
-			"Access-Control-Allow-Methods": "POST, OPTIONS",
+			"Content-Type": "application/json",
 		},
 		Body: bodyStr,
 	}
