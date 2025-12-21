@@ -9,8 +9,8 @@ import * as bedrock from '@aws-cdk/aws-bedrock-alpha';
 import { Construct } from 'constructs';
 
 // Configuration constants
-const THROTTLE_RATE_LIMIT = 10;
-const THROTTLE_BURST_LIMIT = 20;
+const DEFAULT_THROTTLE_RATE_LIMIT = 10;
+const DEFAULT_THROTTLE_BURST_LIMIT = 20;
 const TOKEN_CACHE_TTL_SECONDS = 300; // 5 minutes
 
 export interface StackConfig {
@@ -19,6 +19,8 @@ export interface StackConfig {
   geoRegion: 'US' | 'EU';
   clientTokenParamName: string;
   clientTokenValue: string;
+  throttleRateLimit?: number;  // Optional: defaults to 10 requests/second
+  throttleBurstLimit?: number; // Optional: defaults to 20 requests burst
 }
 
 export interface WristAgentStackProps extends cdk.StackProps {
@@ -34,6 +36,10 @@ export class WristAgentStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config } = props;
+    
+    // Apply throttle limits from config or use defaults
+    const throttleRateLimit = config.throttleRateLimit ?? DEFAULT_THROTTLE_RATE_LIMIT;
+    const throttleBurstLimit = config.throttleBurstLimit ?? DEFAULT_THROTTLE_BURST_LIMIT;
 
     // Create cross-region inference profile for Claude Haiku 4.5
     const crossRegionProfile = bedrock.CrossRegionInferenceProfile.fromConfig({
@@ -130,8 +136,8 @@ export class WristAgentStack extends cdk.Stack {
         }),
         loggingLevel: apigateway.MethodLoggingLevel.INFO,
         dataTraceEnabled: false,
-        throttlingRateLimit: THROTTLE_RATE_LIMIT,
-        throttlingBurstLimit: THROTTLE_BURST_LIMIT,
+        throttlingRateLimit: throttleRateLimit,
+        throttlingBurstLimit: throttleBurstLimit,
       },
       // CORS Configuration:
       // Using wildcard origins (allowOrigins: ALL_ORIGINS) for the following reasons:
