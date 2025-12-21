@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
@@ -119,6 +121,41 @@ func handler(ctx context.Context, event events.APIGatewayProxyRequest) (events.A
 	response, err := callBedrock(ctx, &req)
 	if err != nil {
 		log.Printf("Bedrock call failed: %v", err)
+		
+		// Check for specific error types to provide better user feedback
+		var throttlingErr *types.ThrottlingException
+		var validationErr *types.ValidationException
+		var modelTimeoutErr *types.ModelTimeoutException
+		var internalServerErr *types.InternalServerException
+		var quotaErr *types.ServiceQuotaExceededException
+		
+		if errors.As(err, &throttlingErr) {
+			return apiResponse(429, map[string]string{
+				"error": "Service temporarily unavailable due to high demand. Please try again in a moment.",
+			}), nil
+		}
+		if errors.As(err, &validationErr) {
+			return apiResponse(400, map[string]string{
+				"error": "Invalid request format. Please check your input and try again.",
+			}), nil
+		}
+		if errors.As(err, &modelTimeoutErr) {
+			return apiResponse(504, map[string]string{
+				"error": "Request processing timed out. Please try again with a shorter request.",
+			}), nil
+		}
+		if errors.As(err, &quotaErr) {
+			return apiResponse(429, map[string]string{
+				"error": "Service quota exceeded. Please try again later.",
+			}), nil
+		}
+		if errors.As(err, &internalServerErr) {
+			return apiResponse(503, map[string]string{
+				"error": "Service temporarily unavailable. Please try again shortly.",
+			}), nil
+		}
+		
+		// Generic error for other cases
 		return apiResponse(500, map[string]string{"error": "Failed to process request"}), nil
 	}
 
