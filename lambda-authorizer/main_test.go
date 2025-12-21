@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,6 +254,246 @@ func TestHandler_Integration(t *testing.T) {
 	ctx := context.Background()
 	_, err := handler(ctx, event)
 	if err != nil {
-		t.Logf("Integration test error (expected if no AWS credentials): %v", err)
+		t.Skipf("Integration test skipped (requires AWS credentials): %v", err)
 	}
 }
+
+// Test empty/whitespace-only token headers
+func TestExtractToken_EmptyAfterTrim(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{
+			name: "whitespace only X-Client-Token",
+			headers: map[string]string{
+				"X-Client-Token": "   ",
+			},
+			want: "",
+		},
+		{
+			name: "empty X-Client-Token",
+			headers: map[string]string{
+				"X-Client-Token": "",
+			},
+			want: "",
+		},
+		{
+			name: "whitespace only Authorization Bearer",
+			headers: map[string]string{
+				"Authorization": "Bearer    ",
+			},
+			want: "",
+		},
+		{
+			name: "Bearer with no token",
+			headers: map[string]string{
+				"Authorization": "Bearer",
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := events.APIGatewayCustomAuthorizerRequestTypeRequest{
+				Headers: tt.headers,
+			}
+			got := extractToken(event)
+			if got != tt.want {
+				t.Errorf("extractToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Test malformed Authorization headers
+func TestExtractToken_MalformedAuthHeader(t *testing.T) {
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    string
+	}{
+		{
+			name: "Authorization without Bearer prefix",
+			headers: map[string]string{
+				"Authorization": "token-without-bearer",
+			},
+			want: "", // No Bearer prefix, so ignored
+		},
+		{
+			name: "Authorization with lowercase bearer",
+			headers: map[string]string{
+				"Authorization": "bearer my-token",
+			},
+			want: "", // Case-sensitive check for "Bearer "
+		},
+		{
+			name: "Authorization with Basic auth",
+			headers: map[string]string{
+				"Authorization": "Basic dXNlcjpwYXNz",
+			},
+			want: "", // Not Bearer auth
+		},
+		{
+			name: "Bearer without space",
+			headers: map[string]string{
+				"Authorization": "Bearer",
+			},
+			want: "", // Bearer with no space or token
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := events.APIGatewayCustomAuthorizerRequestTypeRequest{
+				Headers: tt.headers,
+			}
+			got := extractToken(event)
+			if got != tt.want {
+				t.Errorf("extractToken() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// Test concurrent cache access
+func TestTokenCache_ConcurrentAccess(t *testing.T) {
+	// Reset cache
+	tokenCache.mu.Lock()
+	tokenCache.token = "concurrent-test-token"
+	tokenCache.expiration = time.Now().Add(5 * time.Minute)
+	tokenCache.mu.Unlock()
+
+	// Spawn multiple goroutines to read from cache concurrently
+	const numGoroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+
+	results := make(chan string, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			tokenCache.mu.RLock()
+			token := tokenCache.token
+			tokenCache.mu.RUnlock()
+			results <- token
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	// Verify all goroutines read the same value
+	for token := range results {
+		if token != "concurrent-test-token" {
+			t.Errorf("Expected 'concurrent-test-token', got '%s'", token)
+		}
+	}
+}
+
+// Test circuit breaker functionality
+func TestCircuitBreaker_OpenAndClose(t *testing.T) {
+	cb := &CircuitBreaker{}
+
+	// Circuit should be closed initially
+	if cb.isOpen() {
+		t.Error("Circuit should be closed initially")
+	}
+
+	// Record failures to open circuit
+	for i := 0; i < circuitBreakerThreshold; i++ {
+		cb.recordFailure()
+	}
+
+	// Circuit should be open after threshold failures
+	if !cb.isOpen() {
+		t.Error("Circuit should be open after threshold failures")
+	}
+
+	// Reset circuit
+	cb.reset()
+
+	// Circuit should be closed after reset
+	if cb.isOpen() {
+		t.Error("Circuit should be closed after reset")
+	}
+}
+
+// Test circuit breaker timeout
+func TestCircuitBreaker_Timeout(t *testing.T) {
+	cb := &CircuitBreaker{}
+
+	// Record failures to open circuit
+	for i := 0; i < circuitBreakerThreshold; i++ {
+		cb.recordFailure()
+	}
+
+	if !cb.isOpen() {
+		t.Error("Circuit should be open")
+	}
+
+	// Manually set last failure to past the timeout
+	cb.mu.Lock()
+	cb.lastFailure = time.Now().Add(-circuitBreakerTimeout - time.Second)
+	cb.mu.Unlock()
+
+	// Circuit should now be considered closed (timeout passed)
+	if cb.isOpen() {
+		t.Error("Circuit should be closed after timeout")
+	}
+}
+
+// Test hashToken function
+func TestHashToken(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{
+			name:  "simple token",
+			token: "my-secret-token",
+		},
+		{
+			name:  "complex token",
+			token: "Bearer abc123!@#$%^&*()",
+		},
+		{
+			name:  "empty token",
+			token: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash1 := hashToken(tt.token)
+			hash2 := hashToken(tt.token)
+
+			// Same token should produce same hash
+			if hash1 != hash2 {
+				t.Errorf("hashToken() produced different results for same input: %s vs %s", hash1, hash2)
+			}
+
+			// Hash should start with "user-" prefix
+			if !strings.HasPrefix(hash1, "user-") {
+				t.Errorf("hashToken() result should start with 'user-', got: %s", hash1)
+			}
+
+			// Hash should be consistent length (user- + 16 hex chars)
+			expectedLen := len("user-") + 16
+			if len(hash1) != expectedLen {
+				t.Errorf("hashToken() result should be %d characters, got %d: %s", expectedLen, len(hash1), hash1)
+			}
+		})
+	}
+
+	// Different tokens should produce different hashes
+	hash1 := hashToken("token1")
+	hash2 := hashToken("token2")
+	if hash1 == hash2 {
+		t.Error("Different tokens should produce different hashes")
+	}
+}
+
