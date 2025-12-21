@@ -167,18 +167,21 @@ func (cb *CircuitBreaker) isOpen() bool {
 		return false
 	}
 	
-	// Check if timeout has passed
-	if time.Since(cb.lastFailure) < circuitBreakerTimeout {
-		cb.mu.RUnlock()
+	// Check if timeout has passed - capture time once to avoid drift
+	lastFailureTime := cb.lastFailure
+	cb.mu.RUnlock()
+	
+	timeSinceFailure := time.Since(lastFailureTime)
+	if timeSinceFailure < circuitBreakerTimeout {
 		return true
 	}
-	cb.mu.RUnlock()
 	
 	// Timeout passed - upgrade to write lock and reset
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	
 	// Double-check after acquiring write lock to avoid race condition
+	// Use the same time calculation to avoid inconsistency
 	if cb.failures >= circuitBreakerThreshold && time.Since(cb.lastFailure) >= circuitBreakerTimeout {
 		cb.failures = 0
 		log.Printf("Circuit breaker RESET after timeout")
