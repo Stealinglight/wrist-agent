@@ -282,12 +282,11 @@ func getExpectedToken(ctx context.Context) (string, error) {
 	circuitBreaker.reset()
 
 	// SECURITY: Never log token values - only log metadata about the cache operation
-	token := strings.TrimSpace(aws.ToString(output.Parameter.Value))
+	token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
 	if token == "" {
 		return "", fmt.Errorf("SSM parameter %s returned empty value", tokenParamName)
 	}
 	
-	token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
 	tokenCache.token = token
 	tokenCache.expiration = time.Now().Add(cacheDuration)
 
