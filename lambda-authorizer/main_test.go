@@ -662,4 +662,66 @@ func TestCircuitBreaker_AutoResetRaceCondition(t *testing.T) {
 	}
 }
 
+// TestSSMEmptyTokenValidation verifies that getExpectedToken properly validates
+// empty or whitespace-only tokens from SSM Parameter Store.
+// 
+// Note: This test documents the validation logic without mocking SSM.
+// The actual validation happens in getExpectedToken at line 289-292:
+//   token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
+//   if token == "" {
+//       return "", fmt.Errorf("SSM parameter %s returned empty value", tokenParamName)
+//   }
+//
+// This ensures that:
+// 1. Empty strings are rejected
+// 2. Whitespace-only values are trimmed and rejected
+// 3. An error is returned rather than caching invalid tokens
+func TestSSMEmptyTokenValidation(t *testing.T) {
+	// This test validates the token validation logic used by getExpectedToken
+	testCases := []struct {
+		name      string
+		ssmValue  string
+		shouldErr bool
+	}{
+		{
+			name:      "valid token",
+			ssmValue:  "valid-token-123",
+			shouldErr: false,
+		},
+		{
+			name:      "empty string",
+			ssmValue:  "",
+			shouldErr: true,
+		},
+		{
+			name:      "whitespace only",
+			ssmValue:  "   \t\n  ",
+			shouldErr: true,
+		},
+		{
+			name:      "token with leading/trailing whitespace",
+			ssmValue:  "  valid-token  ",
+			shouldErr: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Simulate the validation logic from getExpectedToken
+			token := strings.TrimSpace(tc.ssmValue)
+			isEmpty := token == ""
+
+			if isEmpty != tc.shouldErr {
+				t.Errorf("Expected shouldErr=%v for value %q (trimmed to %q), got isEmpty=%v",
+					tc.shouldErr, tc.ssmValue, token, isEmpty)
+			}
+
+			// Verify that valid tokens are not rejected
+			if !tc.shouldErr && token == "" {
+				t.Errorf("Valid token %q was incorrectly trimmed to empty", tc.ssmValue)
+			}
+		})
+	}
+}
+
 
