@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -29,6 +31,12 @@ const (
 // Default cache duration in seconds (can be overridden by TOKEN_CACHE_TTL_SECONDS env var)
 const defaultCacheDurationSeconds = 300 // 5 minutes
 
+// Circuit breaker configuration
+const (
+	circuitBreakerThreshold = 3              // Number of failures before opening circuit
+	circuitBreakerTimeout   = 30 * time.Second // How long to wait before trying again
+)
+
 // TokenCache holds cached token with expiration
 type TokenCache struct {
 	token      string
@@ -36,11 +44,19 @@ type TokenCache struct {
 	mu         sync.RWMutex
 }
 
+// CircuitBreaker tracks SSM failures to prevent cascading failures
+type CircuitBreaker struct {
+	failures      int
+	lastFailure   time.Time
+	mu            sync.RWMutex
+}
+
 var (
 	ssmClient      *ssm.Client
 	tokenParamName string
 	region         string
 	tokenCache     = &TokenCache{}
+	circuitBreaker = &CircuitBreaker{}
 	cacheDuration  time.Duration
 )
 
@@ -99,8 +115,10 @@ func handler(ctx context.Context, event events.APIGatewayCustomAuthorizerRequest
 		}), nil
 	}
 
-	log.Printf("Authorization granted")
-	return generatePolicy("wrist-agent-user", "Allow", event.MethodArn, map[string]interface{}{
+	// Use hashed token as principal ID for audit trail
+	principalID := hashToken(token)
+	log.Printf("Authorization granted for principal: %s", principalID)
+	return generatePolicy(principalID, "Allow", event.MethodArn, map[string]interface{}{
 		"authenticated": "true",
 	}), nil
 }
@@ -110,17 +128,98 @@ func extractToken(event events.APIGatewayCustomAuthorizerRequestTypeRequest) str
 	// Check X-Client-Token header (case-insensitive)
 	for key, value := range event.Headers {
 		if strings.EqualFold(key, "X-Client-Token") {
-			return strings.TrimSpace(value)
+			token := strings.TrimSpace(value)
+			if token != "" {
+				return token
+			}
 		}
 	}
 
 	// Fallback to Authorization header with Bearer prefix
 	if auth, ok := event.Headers["Authorization"]; ok {
-		token := strings.TrimPrefix(auth, "Bearer ")
-		return strings.TrimSpace(token)
+		// Check if it starts with "Bearer " (with space)
+		if strings.HasPrefix(auth, "Bearer ") {
+			token := strings.TrimSpace(auth[7:]) // Skip "Bearer "
+			if token != "" {
+				return token
+			}
+		}
 	}
 
 	return ""
+}
+
+// hashToken creates a SHA-256 hash of the token for use as principal ID
+// This allows distinguishing users in audit logs without exposing the actual token
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return "user-" + hex.EncodeToString(hash[:8]) // Use first 8 bytes (16 hex chars) for readability
+}
+
+// isOpen checks if the circuit breaker is open
+// After timeout expires, the circuit transitions to "half-open" state where the next
+// SSM call will be attempted. If it succeeds, reset() is called. If it fails, failures
+// are incremented and circuit re-opens.
+func (cb *CircuitBreaker) isOpen() bool {
+	cb.mu.RLock()
+	if cb.failures < circuitBreakerThreshold {
+		cb.mu.RUnlock()
+		return false
+	}
+	
+	// Check if timeout has passed - capture time once to avoid drift
+	lastFailureTime := cb.lastFailure
+	cb.mu.RUnlock()
+	
+	timeSinceFailure := time.Since(lastFailureTime)
+	if timeSinceFailure < circuitBreakerTimeout {
+		return true
+	}
+	
+	// Timeout passed - upgrade to write lock and reset
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	// Double-check after acquiring write lock to avoid race condition
+	// Use the same time calculation to avoid inconsistency
+	if cb.failures >= circuitBreakerThreshold && time.Since(cb.lastFailure) >= circuitBreakerTimeout {
+		cb.failures = 0
+		log.Printf("Circuit breaker RESET after timeout")
+	}
+	return false
+}
+
+// recordFailure increments the failure count
+func (cb *CircuitBreaker) recordFailure() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	wasOpen := cb.failures >= circuitBreakerThreshold
+	cb.failures++
+	cb.lastFailure = time.Now()
+	
+	// Log when circuit opens
+	if !wasOpen && cb.failures >= circuitBreakerThreshold {
+		log.Printf("Circuit breaker OPENED after %d failures", cb.failures)
+	}
+}
+
+// getFailures returns the current failure count safely
+func (cb *CircuitBreaker) getFailures() int {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.failures
+}
+
+// reset resets the circuit breaker
+func (cb *CircuitBreaker) reset() {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	if cb.failures > 0 {
+		log.Printf("Circuit breaker CLOSED (manual reset from %d failures)", cb.failures)
+	}
+	cb.failures = 0
 }
 
 // getExpectedToken retrieves and caches the expected token from SSM
@@ -133,6 +232,20 @@ func getExpectedToken(ctx context.Context) (string, error) {
 
 	if token != "" && time.Now().Before(expiration) {
 		return token, nil
+	}
+
+	// Check circuit breaker before attempting SSM call
+	if circuitBreaker.isOpen() {
+		// Circuit is open, try to use cached token even if expired
+		tokenCache.mu.RLock()
+		cachedToken := tokenCache.token
+		tokenCache.mu.RUnlock()
+		
+		if cachedToken != "" {
+			log.Printf("Circuit breaker open, using stale cached token")
+			return cachedToken, nil
+		}
+		return "", fmt.Errorf("circuit breaker open and no cached token available")
 	}
 
 	// Cache miss or expired - fetch from SSM
@@ -153,10 +266,27 @@ func getExpectedToken(ctx context.Context) (string, error) {
 		WithDecryption: aws.Bool(true),
 	})
 	if err != nil {
+		circuitBreaker.recordFailure()
+		failureCount := circuitBreaker.getFailures()
+		log.Printf("SSM GetParameter failed (failures: %d): %v", failureCount, err)
+		
+		// Try to return stale cache if available
+		if tokenCache.token != "" {
+			log.Printf("Returning stale cached token due to SSM failure")
+			return tokenCache.token, nil
+		}
 		return "", fmt.Errorf("failed to get SSM parameter %s: %w", tokenParamName, err)
 	}
 
+	// Success - reset circuit breaker
+	circuitBreaker.reset()
+
 	// SECURITY: Never log token values - only log metadata about the cache operation
+	token := strings.TrimSpace(aws.ToString(output.Parameter.Value))
+	if token == "" {
+		return "", fmt.Errorf("SSM parameter %s returned empty value", tokenParamName)
+	}
+	
 	token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
 	tokenCache.token = token
 	tokenCache.expiration = time.Now().Add(cacheDuration)
