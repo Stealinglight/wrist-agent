@@ -360,7 +360,21 @@ func TestExtractToken_MalformedAuthHeader(t *testing.T) {
 
 // Test concurrent cache access
 func TestTokenCache_ConcurrentAccess(t *testing.T) {
-	// Reset cache
+	// Save original state
+	tokenCache.mu.Lock()
+	origToken := tokenCache.token
+	origExpiration := tokenCache.expiration
+	tokenCache.mu.Unlock()
+	
+	// Cleanup after test
+	defer func() {
+		tokenCache.mu.Lock()
+		tokenCache.token = origToken
+		tokenCache.expiration = origExpiration
+		tokenCache.mu.Unlock()
+	}()
+	
+	// Reset cache for test
 	tokenCache.mu.Lock()
 	tokenCache.token = "concurrent-test-token"
 	tokenCache.expiration = time.Now().Add(5 * time.Minute)

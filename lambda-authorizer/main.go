@@ -181,6 +181,13 @@ func (cb *CircuitBreaker) recordFailure() {
 	cb.lastFailure = time.Now()
 }
 
+// getFailures returns the current failure count safely
+func (cb *CircuitBreaker) getFailures() int {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.failures
+}
+
 // reset resets the circuit breaker
 func (cb *CircuitBreaker) reset() {
 	cb.mu.Lock()
@@ -228,7 +235,8 @@ func getExpectedToken(ctx context.Context) (string, error) {
 	})
 	if err != nil {
 		circuitBreaker.recordFailure()
-		log.Printf("SSM GetParameter failed (failures: %d): %v", circuitBreaker.failures, err)
+		failureCount := circuitBreaker.getFailures()
+		log.Printf("SSM GetParameter failed (failures: %d): %v", failureCount, err)
 		
 		// Try to return stale cache if available
 		if tokenCache.token != "" {
