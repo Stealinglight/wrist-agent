@@ -224,13 +224,16 @@ func (cb *CircuitBreaker) reset() {
 
 // getExpectedToken retrieves and caches the expected token from SSM
 func getExpectedToken(ctx context.Context) (string, error) {
+	// Capture current time once for consistency across checks
+	now := time.Now()
+	
 	// Read token and expiration atomically to avoid race condition
 	tokenCache.mu.RLock()
 	token := tokenCache.token
 	expiration := tokenCache.expiration
 	tokenCache.mu.RUnlock()
 
-	if token != "" && time.Now().Before(expiration) {
+	if token != "" && now.Before(expiration) {
 		return token, nil
 	}
 
@@ -253,7 +256,8 @@ func getExpectedToken(ctx context.Context) (string, error) {
 	defer tokenCache.mu.Unlock()
 
 	// Double-check after acquiring write lock (read atomically again)
-	if tokenCache.token != "" && time.Now().Before(tokenCache.expiration) {
+	// Reuse the same 'now' timestamp to avoid time drift between checks
+	if tokenCache.token != "" && now.Before(tokenCache.expiration) {
 		return tokenCache.token, nil
 	}
 
