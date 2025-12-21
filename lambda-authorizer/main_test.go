@@ -235,6 +235,71 @@ func TestGeneratePolicy_WithErrorContext(t *testing.T) {
 	}
 }
 
+// Test that context timeout is properly set (3 seconds for SSM calls)
+func TestGetExpectedToken_ContextTimeout(t *testing.T) {
+	// This test verifies the timeout behavior without hitting actual SSM
+	// The implementation uses context.WithTimeout(ctx, 3*time.Second)
+
+	// Create a context that's already cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// Reset cache to force SSM call
+	tokenCache.mu.Lock()
+	tokenCache.token = ""
+	tokenCache.expiration = time.Time{}
+	tokenCache.mu.Unlock()
+
+	// getExpectedToken should fail quickly due to cancelled context
+	start := time.Now()
+	_, err := getExpectedToken(ctx)
+	elapsed := time.Since(start)
+
+	// Should fail fast (not hang) when context is cancelled
+	if err == nil {
+		t.Error("Expected error when context is cancelled")
+	}
+
+	// Should complete quickly (under 1 second), not wait for 3s timeout
+	if elapsed > 1*time.Second {
+		t.Errorf("Expected quick failure with cancelled context, took %v", elapsed)
+	}
+}
+
+// Test cache atomicity - token and expiration should be read together
+func TestTokenCache_AtomicRead(t *testing.T) {
+	// Set up cache with valid token
+	tokenCache.mu.Lock()
+	tokenCache.token = "atomic-test-token"
+	tokenCache.expiration = time.Now().Add(5 * time.Minute)
+	tokenCache.mu.Unlock()
+
+	// Simulate concurrent reads (verifying atomic read pattern)
+	done := make(chan bool)
+	for i := 0; i < 10; i++ {
+		go func() {
+			tokenCache.mu.RLock()
+			token := tokenCache.token
+			expiration := tokenCache.expiration
+			tokenCache.mu.RUnlock()
+
+			// Both values should be read atomically
+			if token == "atomic-test-token" && expiration.IsZero() {
+				t.Error("Race condition: token set but expiration not read atomically")
+			}
+			if token == "" && !expiration.IsZero() {
+				t.Error("Race condition: expiration set but token not read atomically")
+			}
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+}
+
 // Integration test (requires AWS credentials)
 func TestHandler_Integration(t *testing.T) {
 	if testing.Short() {

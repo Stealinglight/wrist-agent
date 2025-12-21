@@ -194,11 +194,13 @@ sequenceDiagram
     participant Admin
     participant SSM as SSM Parameter
     participant Cache as Authorizer Cache
+    participant APIGW as API Gateway Cache
     participant Shortcut as Apple Shortcut
     
     Admin->>Admin: Generate new token
     Admin->>SSM: Update parameter
-    Note over Cache: Cache expires in ≤5 min
+    Note over Cache: Lambda cache expires in ≤5 min
+    Note over APIGW: API GW cache expires in ≤5 min
     Admin->>Shortcut: Update X-Client-Token
     Note over Shortcut: New token active
 ```
@@ -207,8 +209,56 @@ sequenceDiagram
 
 1. Generate new token: `openssl rand -base64 32`
 2. Update SSM parameter
-3. Wait up to 5 minutes for cache expiry
+3. Wait up to **10 minutes** for full cache expiry (see below)
 4. Update Apple Shortcut with new token
+
+### ⚠️ Cache Propagation Delay
+
+Token rotation has a **maximum 10-minute propagation delay** due to dual-layer caching:
+
+| Cache Layer                  | TTL       | Purpose                                  |
+| ---------------------------- | --------- | ---------------------------------------- |
+| API Gateway Authorizer Cache | 5 minutes | Caches authorization decisions per token |
+| Lambda Token Cache           | 5 minutes | Caches SSM parameter value               |
+
+**Worst-case scenario:**
+1. Old token cached in Lambda (just refreshed) → 5 min remaining
+2. Authorization result cached in API Gateway (just cached) → 5 min remaining
+3. Total delay: **up to 10 minutes**
+
+**Emergency token invalidation:**
+
+For immediate token invalidation (security incident), you must:
+
+```bash
+# 1. Rotate the token in SSM
+aws ssm put-parameter \
+  --name "/wrist-agent/client-token" \
+  --value "$(openssl rand -base64 32)" \
+  --overwrite
+
+# 2. Force Lambda cache refresh by redeploying the authorizer
+aws lambda update-function-configuration \
+  --function-name WristAgentStack-WristAgentAuthorizer \
+  --environment "Variables={FORCE_REFRESH=$(date +%s)}"
+
+# 3. Clear API Gateway cache (if stage caching enabled)
+aws apigateway flush-stage-authorizers-cache \
+  --rest-api-id YOUR_API_ID \
+  --stage-name prod
+```
+
+**Reducing propagation delay:**
+
+To reduce the delay, lower the cache TTLs (trade-off: more SSM calls, higher latency):
+
+```bash
+# In CDK stack, reduce authorizer cache TTL
+authorizerResultTtl: cdk.Duration.minutes(1)  # Default: 5 min
+
+# In Lambda environment, reduce token cache TTL
+TOKEN_CACHE_TTL_SECONDS=60  # Default: 300 (5 min)
+```
 
 ### Recommended Rotation Schedule
 

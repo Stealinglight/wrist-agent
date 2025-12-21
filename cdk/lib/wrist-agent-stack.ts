@@ -73,11 +73,14 @@ export class WristAgentStack extends cdk.Stack {
     // Grant authorizer function access to SSM parameter (both String and SecureString)
     tokenParam.grantRead(this.authorizerFn);
 
-    // Grant KMS decrypt permission for SecureString parameters (uses default SSM key)
+    // Grant KMS decrypt permission for SecureString parameters
+    // Scoped to the AWS-managed SSM key (alias/aws/ssm) for least-privilege
     this.authorizerFn.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['kms:Decrypt'],
-      resources: ['*'], // Default SSM key - can be restricted to specific key ARN if known
+      resources: [
+        `arn:aws:kms:${config.region}:${this.account}:alias/aws/ssm`,
+      ],
       conditions: {
         StringEquals: {
           'kms:ViaService': `ssm.${config.region}.amazonaws.com`,

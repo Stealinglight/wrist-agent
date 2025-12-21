@@ -125,24 +125,30 @@ func extractToken(event events.APIGatewayCustomAuthorizerRequestTypeRequest) str
 
 // getExpectedToken retrieves and caches the expected token from SSM
 func getExpectedToken(ctx context.Context) (string, error) {
+	// Read token and expiration atomically to avoid race condition
 	tokenCache.mu.RLock()
-	if tokenCache.token != "" && time.Now().Before(tokenCache.expiration) {
-		token := tokenCache.token
-		tokenCache.mu.RUnlock()
+	token := tokenCache.token
+	expiration := tokenCache.expiration
+	tokenCache.mu.RUnlock()
+
+	if token != "" && time.Now().Before(expiration) {
 		return token, nil
 	}
-	tokenCache.mu.RUnlock()
 
 	// Cache miss or expired - fetch from SSM
 	tokenCache.mu.Lock()
 	defer tokenCache.mu.Unlock()
 
-	// Double-check after acquiring write lock
+	// Double-check after acquiring write lock (read atomically again)
 	if tokenCache.token != "" && time.Now().Before(tokenCache.expiration) {
 		return tokenCache.token, nil
 	}
 
-	output, err := ssmClient.GetParameter(ctx, &ssm.GetParameterInput{
+	// Add timeout to prevent indefinite blocking on SSM call
+	ssmCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	output, err := ssmClient.GetParameter(ssmCtx, &ssm.GetParameterInput{
 		Name:           aws.String(tokenParamName),
 		WithDecryption: aws.Bool(true),
 	})
@@ -151,7 +157,7 @@ func getExpectedToken(ctx context.Context) (string, error) {
 	}
 
 	// SECURITY: Never log token values - only log metadata about the cache operation
-	token := strings.TrimSpace(aws.ToString(output.Parameter.Value))
+	token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
 	tokenCache.token = token
 	tokenCache.expiration = time.Now().Add(cacheDuration)
 
