@@ -156,18 +156,32 @@ func hashToken(token string) string {
 	return "user-" + hex.EncodeToString(hash[:8]) // Use first 8 bytes (16 hex chars) for readability
 }
 
-// isCircuitOpen checks if the circuit breaker is open
+// isOpen checks if the circuit breaker is open
+// After timeout expires, the circuit transitions to "half-open" state where the next
+// SSM call will be attempted. If it succeeds, reset() is called. If it fails, failures
+// are incremented and circuit re-opens.
 func (cb *CircuitBreaker) isOpen() bool {
 	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-	
-	if cb.failures >= circuitBreakerThreshold {
-		// Check if timeout has passed
-		if time.Since(cb.lastFailure) < circuitBreakerTimeout {
-			return true
-		}
-		// Timeout passed, reset
+	if cb.failures < circuitBreakerThreshold {
+		cb.mu.RUnlock()
 		return false
+	}
+	
+	// Check if timeout has passed
+	if time.Since(cb.lastFailure) < circuitBreakerTimeout {
+		cb.mu.RUnlock()
+		return true
+	}
+	cb.mu.RUnlock()
+	
+	// Timeout passed - upgrade to write lock and reset
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	
+	// Double-check after acquiring write lock to avoid race condition
+	if cb.failures >= circuitBreakerThreshold && time.Since(cb.lastFailure) >= circuitBreakerTimeout {
+		cb.failures = 0
+		log.Printf("Circuit breaker RESET after timeout")
 	}
 	return false
 }
@@ -177,8 +191,14 @@ func (cb *CircuitBreaker) recordFailure() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	
+	wasOpen := cb.failures >= circuitBreakerThreshold
 	cb.failures++
 	cb.lastFailure = time.Now()
+	
+	// Log when circuit opens
+	if !wasOpen && cb.failures >= circuitBreakerThreshold {
+		log.Printf("Circuit breaker OPENED after %d failures", cb.failures)
+	}
 }
 
 // getFailures returns the current failure count safely
@@ -193,6 +213,9 @@ func (cb *CircuitBreaker) reset() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	
+	if cb.failures > 0 {
+		log.Printf("Circuit breaker CLOSED (manual reset from %d failures)", cb.failures)
+	}
 	cb.failures = 0
 }
 

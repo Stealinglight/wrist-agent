@@ -511,3 +511,90 @@ func TestHashToken(t *testing.T) {
 	}
 }
 
+// Test circuit breaker with concurrent access
+func TestCircuitBreaker_ConcurrentAccess(t *testing.T) {
+	cb := &CircuitBreaker{}
+	
+	// Concurrently record failures and check state
+	const numGoroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	
+	for i := 0; i < numGoroutines; i++ {
+		go func(iteration int) {
+			defer wg.Done()
+			
+			if iteration < 5 {
+				// First 5 goroutines record failures
+				cb.recordFailure()
+			} else {
+				// Rest check if circuit is open
+				_ = cb.isOpen()
+			}
+		}(i)
+	}
+	
+	wg.Wait()
+	
+	// Verify circuit is open after concurrent failures
+	if !cb.isOpen() {
+		t.Error("Circuit should be open after concurrent failures")
+	}
+	
+	// Get failure count
+	failCount := cb.getFailures()
+	if failCount < circuitBreakerThreshold {
+		t.Errorf("Expected at least %d failures, got %d", circuitBreakerThreshold, failCount)
+	}
+}
+
+// Test circuit breaker auto-reset race condition
+func TestCircuitBreaker_AutoResetRaceCondition(t *testing.T) {
+	cb := &CircuitBreaker{}
+	
+	// Open the circuit
+	for i := 0; i < circuitBreakerThreshold; i++ {
+		cb.recordFailure()
+	}
+	
+	if !cb.isOpen() {
+		t.Fatal("Circuit should be open")
+	}
+	
+	// Set last failure to past timeout
+	cb.mu.Lock()
+	cb.lastFailure = time.Now().Add(-circuitBreakerTimeout - time.Second)
+	cb.mu.Unlock()
+	
+	// Multiple goroutines check if circuit is open simultaneously
+	const numGoroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(numGoroutines)
+	
+	results := make(chan bool, numGoroutines)
+	
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			defer wg.Done()
+			results <- cb.isOpen()
+		}()
+	}
+	
+	wg.Wait()
+	close(results)
+	
+	// All should see circuit as closed (false)
+	for isOpen := range results {
+		if isOpen {
+			t.Error("Circuit should be closed after timeout for all goroutines")
+		}
+	}
+	
+	// Verify failures were actually reset to 0
+	failCount := cb.getFailures()
+	if failCount != 0 {
+		t.Errorf("Expected failures to be reset to 0, got %d", failCount)
+	}
+}
+
+
