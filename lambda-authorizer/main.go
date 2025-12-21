@@ -33,7 +33,7 @@ const defaultCacheDurationSeconds = 300 // 5 minutes
 
 // Circuit breaker configuration
 const (
-	circuitBreakerThreshold = 3              // Number of failures before opening circuit
+	circuitBreakerThreshold = 3                // Number of failures before opening circuit
 	circuitBreakerTimeout   = 30 * time.Second // How long to wait before trying again
 )
 
@@ -46,9 +46,9 @@ type TokenCache struct {
 
 // CircuitBreaker tracks SSM failures to prevent cascading failures
 type CircuitBreaker struct {
-	failures      int
-	lastFailure   time.Time
-	mu            sync.RWMutex
+	failures    int
+	lastFailure time.Time
+	mu          sync.RWMutex
 }
 
 var (
@@ -166,22 +166,22 @@ func (cb *CircuitBreaker) isOpen() bool {
 		cb.mu.RUnlock()
 		return false
 	}
-	
+
 	// Check if timeout has passed - capture time once to avoid drift
 	lastFailureTime := cb.lastFailure
 	cb.mu.RUnlock()
-	
+
 	timeSinceFailure := time.Since(lastFailureTime)
 	if timeSinceFailure < circuitBreakerTimeout {
 		return true
 	}
-	
+
 	// Timeout passed - upgrade to write lock and reset
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	
+
 	// Double-check after acquiring write lock to avoid race condition
-	// Use the same time calculation to avoid inconsistency
+	// Recalculate time to ensure timeout truly passed (guards against concurrent updates)
 	if cb.failures >= circuitBreakerThreshold && time.Since(cb.lastFailure) >= circuitBreakerTimeout {
 		cb.failures = 0
 		log.Printf("Circuit breaker RESET after timeout")
@@ -193,11 +193,11 @@ func (cb *CircuitBreaker) isOpen() bool {
 func (cb *CircuitBreaker) recordFailure() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	
+
 	wasOpen := cb.failures >= circuitBreakerThreshold
 	cb.failures++
 	cb.lastFailure = time.Now()
-	
+
 	// Log when circuit opens
 	if !wasOpen && cb.failures >= circuitBreakerThreshold {
 		log.Printf("Circuit breaker OPENED after %d failures", cb.failures)
@@ -215,7 +215,7 @@ func (cb *CircuitBreaker) getFailures() int {
 func (cb *CircuitBreaker) reset() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
-	
+
 	if cb.failures > 0 {
 		log.Printf("Circuit breaker CLOSED (manual reset from %d failures)", cb.failures)
 	}
@@ -240,7 +240,7 @@ func getExpectedToken(ctx context.Context) (string, error) {
 		tokenCache.mu.RLock()
 		cachedToken := tokenCache.token
 		tokenCache.mu.RUnlock()
-		
+
 		if cachedToken != "" {
 			log.Printf("Circuit breaker open, using stale cached token")
 			return cachedToken, nil
@@ -269,7 +269,7 @@ func getExpectedToken(ctx context.Context) (string, error) {
 		circuitBreaker.recordFailure()
 		failureCount := circuitBreaker.getFailures()
 		log.Printf("SSM GetParameter failed (failures: %d): %v", failureCount, err)
-		
+
 		// Try to return stale cache if available
 		if tokenCache.token != "" {
 			log.Printf("Returning stale cached token due to SSM failure")
@@ -282,12 +282,11 @@ func getExpectedToken(ctx context.Context) (string, error) {
 	circuitBreaker.reset()
 
 	// SECURITY: Never log token values - only log metadata about the cache operation
-	token := strings.TrimSpace(aws.ToString(output.Parameter.Value))
+	token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
 	if token == "" {
 		return "", fmt.Errorf("SSM parameter %s returned empty value", tokenParamName)
 	}
-	
-	token = strings.TrimSpace(aws.ToString(output.Parameter.Value))
+
 	tokenCache.token = token
 	tokenCache.expiration = time.Now().Add(cacheDuration)
 
