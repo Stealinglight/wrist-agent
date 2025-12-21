@@ -9,8 +9,8 @@ import * as bedrock from '@aws-cdk/aws-bedrock-alpha';
 import { Construct } from 'constructs';
 
 // Configuration constants
-const THROTTLE_RATE_LIMIT = 10;
-const THROTTLE_BURST_LIMIT = 20;
+const DEFAULT_THROTTLE_RATE_LIMIT = 10;
+const DEFAULT_THROTTLE_BURST_LIMIT = 20;
 const TOKEN_CACHE_TTL_SECONDS = 300; // 5 minutes
 
 export interface StackConfig {
@@ -19,6 +19,8 @@ export interface StackConfig {
   geoRegion: 'US' | 'EU';
   clientTokenParamName: string;
   clientTokenValue: string;
+  throttleRateLimit?: number;  // Optional: defaults to 10 requests/second
+  throttleBurstLimit?: number; // Optional: defaults to 20 requests burst
 }
 
 export interface WristAgentStackProps extends cdk.StackProps {
@@ -34,6 +36,10 @@ export class WristAgentStack extends cdk.Stack {
     super(scope, id, props);
 
     const { config } = props;
+    
+    // Apply throttle limits from config or use defaults
+    const throttleRateLimit = config.throttleRateLimit ?? DEFAULT_THROTTLE_RATE_LIMIT;
+    const throttleBurstLimit = config.throttleBurstLimit ?? DEFAULT_THROTTLE_BURST_LIMIT;
 
     // Create cross-region inference profile for Claude Haiku 4.5
     const crossRegionProfile = bedrock.CrossRegionInferenceProfile.fromConfig({
@@ -130,13 +136,18 @@ export class WristAgentStack extends cdk.Stack {
         }),
         loggingLevel: apigateway.MethodLoggingLevel.INFO,
         dataTraceEnabled: false,
-        throttlingRateLimit: THROTTLE_RATE_LIMIT,
-        throttlingBurstLimit: THROTTLE_BURST_LIMIT,
+        throttlingRateLimit: throttleRateLimit,
+        throttlingBurstLimit: throttleBurstLimit,
       },
-      // CORS Configuration: Using wildcard origins because:
-      // 1. Apple Shortcuts don't use traditional browser-based CORS
-      // 2. Primary security is provided by token-based authentication
-      // 3. API Gateway handles CORS preflight - Lambda doesn't need CORS headers
+      // CORS Configuration:
+      // Using wildcard origins (allowOrigins: ALL_ORIGINS) for the following reasons:
+      // 1. Primary security layer: Token-based authentication via Lambda Authorizer (not browser-origin-based)
+      // 2. Apple Shortcuts limitation: Cannot set custom Origin headers, always sends "shortcuts://x-callback-url"
+      // 3. Lambda integration: Response headers from Lambda are not required for CORS since API Gateway handles preflight
+      // 4. Security trade-off: While permissive for CORS, the X-Client-Token requirement prevents unauthorized access
+      // 
+      // Alternative considered: Restricting to specific origins would block Apple Shortcuts, the primary client.
+      // If browser-based access is needed in the future, consider adding request validation or IP allowlisting.
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: ['POST', 'OPTIONS'],
