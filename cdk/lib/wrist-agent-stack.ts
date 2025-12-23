@@ -1,9 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as logs from 'aws-cdk-lib/aws-logs';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { GoFunction } from '@aws-cdk/aws-lambda-go-alpha';
 import * as bedrock from '@aws-cdk/aws-bedrock-alpha';
 import { Construct } from 'constructs';
+
+// Configuration constants
+const DEFAULT_THROTTLE_RATE_LIMIT = 10;
+const DEFAULT_THROTTLE_BURST_LIMIT = 20;
+const TOKEN_CACHE_TTL_SECONDS = 300; // 5 minutes
 
 export interface StackConfig {
   region: string;
@@ -11,6 +19,8 @@ export interface StackConfig {
   geoRegion: 'US' | 'EU';
   clientTokenParamName: string;
   clientTokenValue: string;
+  throttleRateLimit?: number;  // Optional: defaults to 10 requests/second
+  throttleBurstLimit?: number; // Optional: defaults to 20 requests burst
 }
 
 export interface WristAgentStackProps extends cdk.StackProps {
@@ -19,22 +29,72 @@ export interface WristAgentStackProps extends cdk.StackProps {
 
 export class WristAgentStack extends cdk.Stack {
   public readonly fn: lambda.Function;
-  public readonly fUrl: lambda.FunctionUrl;
+  public readonly authorizerFn: lambda.Function;
+  public readonly api: apigateway.RestApi;
 
   constructor(scope: Construct, id: string, props: WristAgentStackProps) {
     super(scope, id, props);
 
     const { config } = props;
+    
+    // Apply throttle limits from config or use defaults
+    const throttleRateLimit = config.throttleRateLimit ?? DEFAULT_THROTTLE_RATE_LIMIT;
+    const throttleBurstLimit = config.throttleBurstLimit ?? DEFAULT_THROTTLE_BURST_LIMIT;
 
     // Create cross-region inference profile for Claude Haiku 4.5
     const crossRegionProfile = bedrock.CrossRegionInferenceProfile.fromConfig({
-      geoRegion: config.geoRegion === 'US' 
-        ? bedrock.CrossRegionInferenceProfileRegion.US 
+      geoRegion: config.geoRegion === 'US'
+        ? bedrock.CrossRegionInferenceProfileRegion.US
         : bedrock.CrossRegionInferenceProfileRegion.EU,
       model: bedrock.BedrockFoundationModel.ANTHROPIC_CLAUDE_HAIKU_4_5_V1_0,
     });
 
-    // Create Go Lambda function
+    // Create SSM parameter for client token
+    // NOTE: CDK creates this as a StringParameter (unencrypted) because SecureString
+    // values cannot be created via CloudFormation (the value would be exposed in templates).
+    // After deployment, users SHOULD convert this to SecureString using:
+    //   aws ssm put-parameter --name "/wrist-agent/client-token" --value "YOUR_TOKEN" --type SecureString --overwrite
+    // The authorizer uses WithDecryption: true and works with both String and SecureString.
+    const tokenParam = new ssm.StringParameter(this, 'ClientToken', {
+      parameterName: config.clientTokenParamName,
+      stringValue: config.clientTokenValue,
+      description: 'Shared client token for Wrist Agent requests. Convert to SecureString after deployment for production use.',
+      tier: ssm.ParameterTier.STANDARD,
+    });
+
+    // Create Lambda Authorizer function
+    this.authorizerFn = new GoFunction(this, 'WristAgentAuthorizer', {
+      entry: '../lambda-authorizer',
+      architecture: lambda.Architecture.ARM_64,
+      runtime: lambda.Runtime.PROVIDED_AL2,
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 128,
+      environment: {
+        CLIENT_TOKEN_PARAM_NAME: config.clientTokenParamName,
+        TOKEN_CACHE_TTL_SECONDS: String(TOKEN_CACHE_TTL_SECONDS),
+      },
+      description: 'Wrist Agent API Gateway Lambda Authorizer',
+    });
+
+    // Grant authorizer function access to SSM parameter (both String and SecureString)
+    tokenParam.grantRead(this.authorizerFn);
+
+    // Grant KMS decrypt permission for SecureString parameters
+    // Scoped to the AWS-managed SSM key (alias/aws/ssm) for least-privilege
+    this.authorizerFn.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['kms:Decrypt'],
+      resources: [
+        `arn:aws:kms:${config.region}:${this.account}:alias/aws/ssm`,
+      ],
+      conditions: {
+        StringEquals: {
+          'kms:ViaService': `ssm.${config.region}.amazonaws.com`,
+        },
+      },
+    }));
+
+    // Create main handler Lambda function
     this.fn = new GoFunction(this, 'WristAgentHandler', {
       entry: '../lambda',
       architecture: lambda.Architecture.ARM_64,
@@ -44,40 +104,88 @@ export class WristAgentStack extends cdk.Stack {
       environment: {
         BEDROCK_REGION: config.region,
         BEDROCK_MODEL_ID: crossRegionProfile.inferenceProfileId,
-        CLIENT_TOKEN_PARAM_NAME: config.clientTokenParamName,
       },
       description: 'Wrist Agent Lambda handler for Bedrock integration',
     });
 
-    const tokenParam = new ssm.StringParameter(this, 'ClientToken', {
-      parameterName: config.clientTokenParamName,
-      stringValue: config.clientTokenValue,
-      description: 'Shared client token for Wrist Agent requests',
-      tier: ssm.ParameterTier.STANDARD,
-    });
-
-    // Grant cross-region inference permissions (handles all regions automatically)
+    // Grant cross-region inference permissions
     crossRegionProfile.grantInvoke(this.fn);
 
-    tokenParam.grantRead(this.fn);
-
-    // Create Function URL with CORS configuration
-    this.fUrl = this.fn.addFunctionUrl({
-      authType: lambda.FunctionUrlAuthType.NONE,
-      cors: {
-        allowCredentials: false,
-        allowedHeaders: ['Content-Type', 'X-Client-Token'],
-        allowedMethods: [lambda.HttpMethod.POST],
-        allowedOrigins: ['*'],
-        maxAge: cdk.Duration.hours(1),
-      },
+    // Create REST API with logging
+    const logGroup = new logs.LogGroup(this, 'ApiGatewayLogs', {
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // Output the Function URL
-    new cdk.CfnOutput(this, 'FunctionUrl', {
-      value: this.fUrl.url,
-      description: 'Lambda Function URL for Wrist Agent API',
-      exportName: 'WristAgentFunctionUrl',
+    this.api = new apigateway.RestApi(this, 'WristAgentApi', {
+      restApiName: 'Wrist Agent API',
+      description: 'API Gateway for Wrist Agent - Apple Watch to Bedrock integration',
+      deployOptions: {
+        stageName: 'prod',
+        accessLogDestination: new apigateway.LogGroupLogDestination(logGroup),
+        accessLogFormat: apigateway.AccessLogFormat.jsonWithStandardFields({
+          caller: true,
+          httpMethod: true,
+          ip: true,
+          protocol: true,
+          requestTime: true,
+          resourcePath: true,
+          responseLength: true,
+          status: true,
+          user: true,
+        }),
+        loggingLevel: apigateway.MethodLoggingLevel.INFO,
+        dataTraceEnabled: false,
+        throttlingRateLimit: throttleRateLimit,
+        throttlingBurstLimit: throttleBurstLimit,
+      },
+      // CORS Configuration:
+      // Using wildcard origins (allowOrigins: ALL_ORIGINS) for the following reasons:
+      // 1. Primary security layer: Token-based authentication via Lambda Authorizer (not browser-origin-based)
+      // 2. Apple Shortcuts limitation: Cannot set custom Origin headers, always sends "shortcuts://x-callback-url"
+      // 3. Lambda integration: Response headers from Lambda are not required for CORS since API Gateway handles preflight
+      // 4. Security trade-off: While permissive for CORS, the X-Client-Token requirement prevents unauthorized access
+      // 
+      // Alternative considered: Restricting to specific origins would block Apple Shortcuts, the primary client.
+      // If browser-based access is needed in the future, consider adding request validation or IP allowlisting.
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS,
+        allowMethods: ['POST', 'OPTIONS'],
+        allowHeaders: ['Content-Type', 'X-Client-Token'],
+        maxAge: cdk.Duration.hours(1),
+      },
+      endpointTypes: [apigateway.EndpointType.REGIONAL],
+    });
+
+    // Create REQUEST type Lambda Authorizer
+    const authorizer = new apigateway.RequestAuthorizer(this, 'TokenAuthorizer', {
+      handler: this.authorizerFn,
+      identitySources: [apigateway.IdentitySource.header('X-Client-Token')],
+      resultsCacheTtl: cdk.Duration.seconds(TOKEN_CACHE_TTL_SECONDS),
+      authorizerName: 'WristAgentTokenAuthorizer',
+    });
+
+    // Create /invoke resource with POST method
+    const invokeResource = this.api.root.addResource('invoke');
+    invokeResource.addMethod('POST', new apigateway.LambdaIntegration(this.fn, {
+      proxy: true,
+      allowTestInvoke: true,
+    }), {
+      authorizer: authorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM,
+    });
+
+    // Output the API Gateway URL
+    new cdk.CfnOutput(this, 'ApiEndpoint', {
+      value: this.api.url,
+      description: 'API Gateway endpoint URL for Wrist Agent',
+      exportName: 'WristAgentApiEndpoint',
+    });
+
+    new cdk.CfnOutput(this, 'InvokeEndpoint', {
+      value: `${this.api.url}invoke`,
+      description: 'Full invoke endpoint URL for Wrist Agent',
+      exportName: 'WristAgentInvokeEndpoint',
     });
 
     new cdk.CfnOutput(this, 'TokenParameterName', {

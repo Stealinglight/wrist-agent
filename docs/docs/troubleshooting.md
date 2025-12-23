@@ -11,10 +11,16 @@ This guide helps you diagnose and resolve common issues with your Wrist Agent de
 ### Test Connectivity
 
 ```bash
-# Check if Function URL is accessible
-curl -I "https://your-function-url"
+# Get your API endpoint
+API_ENDPOINT=$(aws cloudformation describe-stacks \
+  --stack-name WristAgentStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`InvokeEndpoint`].OutputValue' \
+  --output text)
 
-# Expected: HTTP/2 200 or 401 (authentication required)
+# Check if API Gateway is accessible (expect 403 without token)
+curl -I "$API_ENDPOINT"
+
+# Expected: HTTP/2 403 (authorization required)
 # If timeout or connection refused, check deployment
 ```
 
@@ -28,8 +34,14 @@ TOKEN=$(aws ssm get-parameter \
   --query 'Parameter.Value' \
   --output text)
 
+# Get API endpoint
+API_ENDPOINT=$(aws cloudformation describe-stacks \
+  --stack-name WristAgentStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`InvokeEndpoint`].OutputValue' \
+  --output text)
+
 # Test with token
-curl -X POST "https://your-function-url" \
+curl -X POST "$API_ENDPOINT" \
   -H "Content-Type: application/json" \
   -H "X-Client-Token: $TOKEN" \
   -d '{"text": "test", "mode": "note"}'
@@ -40,33 +52,65 @@ curl -X POST "https://your-function-url" \
 ### Check Lambda Logs
 
 ```bash
-# View recent logs
+# View main Lambda logs
 aws logs tail /aws/lambda/WristAgentStack-WristAgentHandler --follow
 
-# Search for errors in last hour
+# View authorizer Lambda logs
+aws logs tail /aws/lambda/WristAgentStack-WristAgentAuthorizer --follow
+
+# Search for errors in last hour (main handler)
 aws logs filter-log-events \
   --log-group-name "/aws/lambda/WristAgentStack-WristAgentHandler" \
   --start-time $(date -d '1 hour ago' +%s)000 \
   --filter-pattern "ERROR"
+
+# Search for authorization denials (authorizer)
+aws logs filter-log-events \
+  --log-group-name "/aws/lambda/WristAgentStack-WristAgentAuthorizer" \
+  --start-time $(date -d '1 hour ago' +%s)000 \
+  --filter-pattern "denied"
 ```
 
 ## Common Issues
 
 ### Authentication Errors
 
-#### 401 Unauthorized
+#### 403 Forbidden (API Gateway Authorizer)
 
 **Symptoms:**
 ```json
 {
-  "error": "Unauthorized"
+  "Message": "User is not authorized to access this resource with an explicit deny"
 }
 ```
 
-**Causes:**
-1. Missing or incorrect `X-Client-Token` header
-2. Token mismatch with SSM parameter
-3. Token not set in Apple Shortcut
+**Error Types in CloudWatch Logs:**
+
+The Lambda Authorizer returns specific error types that can be found in CloudWatch Logs:
+
+| Error Type       | Description                             | Solution                        |
+| ---------------- | --------------------------------------- | ------------------------------- |
+| `missing_token`  | `X-Client-Token` header not provided    | Add header to request           |
+| `token_mismatch` | Token doesn't match SSM parameter value | Update token in shortcut or SSM |
+| `ssm_failure`    | Failed to retrieve token from SSM       | Check Lambda IAM permissions    |
+
+**Diagnostics with CloudWatch Logs Insights:**
+
+```bash
+# Query authorizer logs for denied requests
+aws logs start-query \
+  --log-group-name "/aws/lambda/WristAgentStack-WristAgentAuthorizer" \
+  --start-time $(date -d '1 hour ago' +%s) \
+  --end-time $(date +%s) \
+  --query-string 'fields @timestamp, @message | filter @message like /denied/ | sort @timestamp desc | limit 20'
+
+# Check for SSM failures
+aws logs start-query \
+  --log-group-name "/aws/lambda/WristAgentStack-WristAgentAuthorizer" \
+  --start-time $(date -d '1 hour ago' +%s) \
+  --end-time $(date +%s) \
+  --query-string 'fields @timestamp, @message | filter @message like /ssm_failure/ or @message like /failed to get SSM/'
+```
 
 **Solutions:**
 
@@ -81,14 +125,38 @@ aws ssm get-parameter \
 # Compare with token in your shortcut
 # If different, update shortcut with correct token
 
-# Or generate new token and update both
+# Or generate new token and update both (use SecureString for production)
 NEW_TOKEN=$(openssl rand -base64 32)
 aws ssm put-parameter \
   --name "/wrist-agent/client-token" \
   --value "$NEW_TOKEN" \
+  --type SecureString \
   --overwrite
 echo "Update your shortcut with: $NEW_TOKEN"
+
+# Clear authorizer cache by redeploying API Gateway
+aws apigateway create-deployment \
+  --rest-api-id $(aws apigateway get-rest-apis --query 'items[?name==`Wrist Agent API`].id' --output text) \
+  --stage-name prod
 ```
+
+#### API Gateway Rate Limiting (429)
+
+**Symptoms:**
+```json
+{
+  "message": "Rate Exceeded."
+}
+```
+
+**Causes:**
+1. Too many requests in short period (limit: 10 req/sec, burst: 20)
+2. Automated scripts hitting API too frequently
+
+**Solutions:**
+- Wait a few seconds and retry
+- Implement exponential backoff in client code
+- For legitimate high-volume needs, update rate limits in CDK stack
 
 ### Bedrock Errors
 

@@ -13,8 +13,8 @@ A seamless Apple Watch to AWS Bedrock integration system that enables one-tap vo
 - **🎙️ One-Tap Voice Capture**: Direct from Apple Watch with complication support
 - **🧠 AI Processing**: Claude Haiku 4.5 with optional extended thinking (up to 65K thinking tokens)
 - **📱 Native Integration**: Seamlessly creates Notes, Reminders, and Calendar events
-- **🔒 Secure**: Header-based authentication with SSM Parameter Store
-- **💰 Cost-Optimized**: Lambda Function URLs instead of API Gateway (~$15-31/month)
+- **🔒 Secure**: API Gateway with Lambda Authorizer and SSM Parameter Store
+- **💰 Cost-Optimized**: Efficient architecture (~$16-32/month)
 - **⚡ Fast**: ARM64 Lambda with sub-second response times
 - **🚀 CI/CD Ready**: GitHub Actions with OIDC deployment
 
@@ -23,21 +23,26 @@ A seamless Apple Watch to AWS Bedrock integration system that enables one-tap vo
 ```mermaid
 graph LR
     A[Apple Watch] --> B[Apple Shortcut]
-    B --> C[Lambda Function URL]
-    C --> D[Go Lambda]
-    D --> E[Bedrock Claude 4]
-    E --> F[Structured Response]
-    F --> G[iOS Apps]
+    B --> C[API Gateway]
+    C --> D[Lambda Authorizer]
+    D --> E{Valid Token?}
+    E -->|Yes| F[Go Lambda]
+    E -->|No| G[401 Denied]
+    F --> H[Bedrock Claude 4]
+    H --> I[Structured Response]
+    I --> J[iOS Apps]
 
-    H[CDK TypeScript] --> D
-    I[GitHub Actions] --> H
-    J[SSM Parameter] --> D
+    K[SSM Parameter] --> D
+    L[CDK TypeScript] --> C
+    M[GitHub Actions] --> L
 ```
 
 **Components:**
 
 - **Apple Watch + Shortcuts**: Voice capture and iOS app integration
-- **AWS Lambda**: Go 1.22+ runtime with Function URLs (ARM64)
+- **API Gateway**: REST API with rate limiting and request validation
+- **Lambda Authorizer**: Token validation with 5-minute caching
+- **AWS Lambda**: Go 1.22+ runtime (ARM64)
 - **AWS Bedrock**: Claude Haiku 4.5 with Messages API
 - **CDK v2**: TypeScript infrastructure as code
 - **GitHub Actions**: OIDC-based CI/CD pipeline
@@ -131,7 +136,7 @@ TOKEN=$(openssl rand -base64 32)
 aws ssm put-parameter \
   --name "/wrist-agent/client-token" \
   --value "$TOKEN" \
-  --type "String" \
+  --type "SecureString" \
   --overwrite
 
 echo "Your token: $TOKEN"
@@ -139,7 +144,7 @@ echo "Your token: $TOKEN"
 
 ### 4. Setup Apple Shortcut
 
-1. Get Function URL from CDK output
+1. Get API Endpoint from CDK output
 2. Create Apple Shortcut with HTTP POST action
 3. Configure headers: `X-Client-Token` and `Content-Type: application/json`
 4. Add Watch complication
@@ -148,13 +153,13 @@ echo "Your token: $TOKEN"
 
 ## 🧪 Testing
 
-### Test the Lambda
+### Test the API
 
 ```bash
 # Get your configuration
-FUNCTION_URL=$(aws cloudformation describe-stacks \
+API_ENDPOINT=$(aws cloudformation describe-stacks \
   --stack-name WristAgentStack \
-  --query 'Stacks[0].Outputs[?OutputKey==`FunctionUrl`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`InvokeEndpoint`].OutputValue' \
   --output text)
 
 TOKEN=$(aws ssm get-parameter \
@@ -164,7 +169,7 @@ TOKEN=$(aws ssm get-parameter \
   --output text)
 
 # Test API
-curl -X POST "$FUNCTION_URL" \
+curl -X POST "$API_ENDPOINT" \
   -H "Content-Type: application/json" \
   -H "X-Client-Token: $TOKEN" \
   -d '{"text": "Create a note about testing", "mode": "note"}'
@@ -214,11 +219,12 @@ Event responses include `startISO`, `endISO`, `location`, `url`, and `notes` whe
 
 ## 🔒 Security
 
-- **Authentication**: Shared token in SSM Parameter Store
+- **API Gateway**: Request validation and rate limiting (10 req/sec, 20 burst)
+- **Lambda Authorizer**: Token validation with 5-minute caching
+- **Authentication**: Shared token in SSM Parameter Store (SecureString)
 - **Transport**: HTTPS with TLS 1.2+
 - **IAM**: Least privilege permissions
 - **Bedrock Auth**: IAM role credentials only (no API keys)
-- **CORS**: Restrictive configuration for Apple Shortcuts
 - **No persistent storage**: Stateless Lambda execution
 
 **Security guide: [docs/docs/security.md](docs/docs/security.md)**
@@ -229,10 +235,11 @@ Monthly costs for moderate usage (100 requests/day):
 
 | Service            | Cost              |
 | ------------------ | ----------------- |
+| API Gateway        | ~$0.35            |
 | Lambda Invocations | ~$0.50            |
 | Bedrock Claude 4   | ~$15-30           |
 | SSM Parameter      | ~$0.05            |
-| **Total**          | **~$15-31/month** |
+| **Total**          | **~$16-32/month** |
 
 ## 📚 Documentation
 
@@ -269,8 +276,9 @@ Uses OIDC for secure AWS deployment (no long-lived credentials).
 
 **401 Unauthorized**
 
-- Verify token matches SSM parameter
-- Check header name is `X-Client-Token`
+- Verify token matches SSM parameter value
+- Check header name is exactly `X-Client-Token`
+- Ensure API Gateway authorizer is deployed
 
 **Bedrock Access Denied**
 
